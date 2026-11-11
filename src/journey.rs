@@ -274,12 +274,14 @@ impl Journey<'_> {
             .map(|pair| (pair[1].0 - pair[0].0) * 1e3);
         let between_ms: Vec<f64> = between_ms.collect();
         // A picture is late when more than a refresh and a half passed since the last.
+        // Where each late one fell tells a slow start from a stutter in the riding.
         let refresh = stage.window.current_monitor();
         let refresh = refresh.and_then(|display| display.refresh_rate_millihertz());
         let refresh_ms = refresh.map(|millihertz| 1e6 / f64::from(millihertz));
-        let late = refresh_ms.map(|refresh_ms| {
-            let late = |gap_ms: &&f64| **gap_ms > 1.5 * refresh_ms;
-            between_ms.iter().filter(late).count()
+        let late_at_s = refresh_ms.map(|refresh_ms| {
+            let asked = pictures.windows(2).filter(|pair| pair[1].4);
+            let late = asked.filter(|pair| (pair[1].0 - pair[0].0) * 1e3 > 1.5 * refresh_ms);
+            late.map(|pair| pair[1].0).collect::<Vec<f64>>()
         });
         let size = stage.window.inner_size();
         let measured = json!({
@@ -306,7 +308,7 @@ impl Journey<'_> {
                 "first_shown_s": pictures.first().map(|first| first.0 + first.2 / 1e3),
                 "between_ms": crate::spread(between_ms),
                 "refresh_ms": refresh_ms,
-                "late": late,
+                "late_at_s": late_at_s,
                 "drawing_ms": crate::spread(pictures.iter().map(|picture| picture.2).collect()),
                 "waiting_for_room_ms":
                     crate::spread(pictures.iter().map(|picture| picture.3).collect()),
