@@ -1,7 +1,8 @@
 //! One command writes a timeline and the analysis numbers, the same every time.
 mod common;
 
-use common::{Value, f, numbers, numbers_bytes, rising_and_falling_song, run_timeline, scratch};
+use common::{Value, curve, num, numbers, numbers_bytes, rising_and_falling_song};
+use common::{run_timeline, scratch};
 
 #[test]
 fn one_command_writes_a_timeline_and_the_numbers_it_was_drawn_from() {
@@ -58,13 +59,8 @@ fn intensity_rises_and_falls_with_the_song() {
     let song = dir.join("song.wav");
     rising_and_falling_song(&song);
     let heard = numbers(&song, &dir);
-    let intensity: Vec<f64> = heard["intensity"]["values"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(f)
-        .collect();
-    let per_second = (1.0 / f(&heard["intensity"]["hop_s"])).round() as usize;
+    let intensity = curve(&heard["intensity"]["values"]);
+    let per_second = (1.0 / num(&heard["intensity"]["hop_s"])).round() as usize;
     assert_eq!(
         intensity.len(),
         24 * per_second,

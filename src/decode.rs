@@ -1,6 +1,5 @@
 //! Decode: a file path in; the whole file as samples at its native rate, or a plain refusal.
 
-use std::fmt;
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -60,36 +59,24 @@ impl Song {
     }
 }
 
-/// Why a file was not accepted. Nothing is ever substituted for a refused file.
-#[derive(Debug)]
-pub struct Refusal(String);
-
-impl fmt::Display for Refusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-fn refuse<T>(reason: impl Into<String>) -> Result<T, Refusal> {
-    Err(Refusal(reason.into()))
-}
-
 const UNSUPPORTED: &str = "it is not a supported audio format (FLAC, WAV or Ogg Vorbis)";
 /// The sample rates analysis can handle. Its loudness meter weighs the sound with a
 /// filter centred near 1,682 Hz, which takes a sample rate of more than twice that, and
 /// accepts none above 2,822,400 Hz. (Below 1,650 Hz the spectrum's bands do not fit either.)
 const SAMPLE_RATES: std::ops::RangeInclusive<u32> = 3_364..=2_822_400;
 
-pub fn decode(path: &Path) -> Result<Song, Refusal> {
+/// The whole file, or why it was not accepted, in one plain line. Nothing is ever
+/// substituted for a refused file.
+pub fn decode(path: &Path) -> Result<Song, String> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            return refuse("the file does not exist");
+            return Err("the file does not exist".into());
         }
-        Err(error) => return refuse(format!("the file cannot be read ({error})")),
+        Err(error) => return Err(format!("the file cannot be read ({error})")),
     };
     if file.metadata().is_ok_and(|metadata| metadata.is_dir()) {
-        return refuse("it is a directory, not an audio file");
+        return Err("it is a directory, not an audio file".into());
     }
 
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
@@ -99,10 +86,10 @@ pub fn decode(path: &Path) -> Result<Song, Refusal> {
         FormatOptions::default(),
         MetadataOptions::default(),
     ) else {
-        return refuse(UNSUPPORTED);
+        return Err(UNSUPPORTED.into());
     };
     let Some(track) = format.default_track(TrackType::Audio) else {
-        return refuse(UNSUPPORTED);
+        return Err(UNSUPPORTED.into());
     };
     let track_id = track.id;
     let Some(Ok(mut decoder)) = track
@@ -114,7 +101,7 @@ pub fn decode(path: &Path) -> Result<Song, Refusal> {
                 .make_audio_decoder(params, &AudioDecoderOptions::default())
         })
     else {
-        return refuse(UNSUPPORTED);
+        return Err(UNSUPPORTED.into());
     };
 
     let mut sample_rate = 0;
@@ -124,32 +111,32 @@ pub fn decode(path: &Path) -> Result<Song, Refusal> {
         let packet = match format.next_packet() {
             Ok(Some(packet)) => packet,
             Ok(None) => break,
-            Err(error) => return refuse(format!("the audio cannot be decoded ({error})")),
+            Err(error) => return Err(format!("the audio cannot be decoded ({error})")),
         };
         if packet.track_id != track_id {
             continue;
         }
         let buffer = match decoder.decode(&packet) {
             Ok(buffer) => buffer,
-            Err(error) => return refuse(format!("the audio cannot be decoded ({error})")),
+            Err(error) => return Err(format!("the audio cannot be decoded ({error})")),
         };
         let (rate, count) = (buffer.spec().rate(), buffer.spec().channels().count());
         if channels.is_empty() {
             if count == 0 || count > 2 {
-                return refuse(format!(
+                return Err(format!(
                     "it has {count} channels; only mono and stereo are supported"
                 ));
             }
             if !SAMPLE_RATES.contains(&rate) {
                 let (least, most) = SAMPLE_RATES.into_inner();
-                return refuse(format!(
+                return Err(format!(
                     "its sample rate is {rate} Hz; analysis handles {least} Hz to {most} Hz"
                 ));
             }
             sample_rate = rate;
             channels = vec![Vec::new(); count];
         } else if rate != sample_rate || count != channels.len() {
-            return refuse("its sample rate or channel count changes part-way through");
+            return Err("its sample rate or channel count changes part-way through".into());
         }
         buffer.copy_to_vec_interleaved(&mut interleaved);
         for frame in interleaved.chunks_exact(count) {
@@ -159,7 +146,7 @@ pub fn decode(path: &Path) -> Result<Song, Refusal> {
         }
     }
     if channels.first().is_none_or(|channel| channel.is_empty()) {
-        return refuse("it holds no audio");
+        return Err("it holds no audio".into());
     }
     Ok(Song {
         sample_rate,

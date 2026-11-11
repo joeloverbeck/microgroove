@@ -16,6 +16,9 @@ use spectrum::{BANDS, Spectrum};
 
 #[derive(Serialize)]
 pub struct Analysis {
+    /// How long the song is. Written among the numbers of the file, not here.
+    #[serde(skip)]
+    pub duration_s: f64,
     pub fingerprint: Fingerprint,
     pub loudness: Loudness,
     /// How hard the song is pushing, from 0 to 1, over song time.
@@ -155,6 +158,7 @@ pub fn analyse(song: &Song) -> Analysis {
 
     let (brightness, fullness) = shape(&band_levels);
     Analysis {
+        duration_s: song.duration_s(),
         fingerprint: Fingerprint {
             tempo_bpm: pulse.bpm,
             rhythmic_regularity: pulse.regularity,
@@ -236,6 +240,13 @@ fn intensity(momentary: &[f32], hop_s: f64) -> Vec<f32> {
         .map(|lufs| ((lufs - quiet) / (loud - quiet)).clamp(0.0, 1.0))
         .collect();
     smooth(&raw, (INTENSITY_SMOOTH_S / hop_s).round() as usize)
+}
+
+/// Whether a value is the largest within `reach` steps either side: of equals, the first.
+fn is_peak(values: &[f32], at: usize, reach: usize) -> bool {
+    let earlier = &values[at.saturating_sub(reach)..at];
+    let later = &values[at + 1..(at + reach + 1).min(values.len())];
+    earlier.iter().all(|v| *v < values[at]) && later.iter().all(|v| *v <= values[at])
 }
 
 /// Each value averaged with its neighbours up to `reach` steps away, nearer ones counting more.

@@ -2,7 +2,7 @@
 //! comfort, measured from the pictures and the camera poses.
 mod common;
 
-use common::{f, rising_and_falling_song, run, scratch, series, write_wav};
+use common::{num, rising_and_falling_song, run, scratch, series, write_wav};
 
 #[test]
 fn position_on_the_route_never_runs_backwards_and_goes_faster_where_the_song_is_intense() {
@@ -67,18 +67,18 @@ fn a_run_at_display_rate_counts_flashes_and_camera_reversals_and_times_the_drawi
         "the clicks are answered by impulses"
     );
     assert!(
-        f(&run["flashes"]["worst_in_any_second"]) < 3.0,
+        num(&run["flashes"]["worst_in_any_second"]) < 3.0,
         "full-screen flashes: {}",
         run["flashes"]
     );
     assert!(
-        f(&run["camera"]["worst_reversals_in_any_second"]) <= 2.0,
+        num(&run["camera"]["worst_reversals_in_any_second"]) <= 2.0,
         "the camera does not shake: {}",
         run["camera"]
     );
     let draw = &run["draw_ms"];
     assert!(
-        f(&draw["median"]) > 0.0 && f(&draw["median"]) <= f(&draw["max"]),
+        num(&draw["median"]) > 0.0 && num(&draw["median"]) <= num(&draw["max"]),
         "the time to draw a moment: {draw}"
     );
 }

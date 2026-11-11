@@ -4,16 +4,10 @@ mod common;
 use common::{run_timeline, scratch};
 
 fn assert_refused(output: &std::process::Output, out: &std::path::Path, expected: &str) {
-    let message = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "expected a non-zero exit");
+    let message = common::complaint(output);
     assert!(
         message.contains(expected),
         "expected {expected:?} in the message, got {message:?}"
-    );
-    assert_eq!(
-        message.trim().lines().count(),
-        1,
-        "expected one plain line, got {message:?}"
     );
     assert!(
         !out.join("analysis.json").exists(),

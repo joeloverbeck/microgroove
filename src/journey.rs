@@ -16,7 +16,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 use crate::decode::Song;
 use crate::place::{Moment, Place};
 use crate::playback::Playback;
-use crate::render::{FORMAT, Gpu, Renderer, Screen, Size, Still};
+use crate::render::{Gpu, Renderer, Screen, Size, Still};
 
 /// Tuning: the nudge a journey starts with, which shows the picture this far ahead of
 /// the audio. A journey says the nudge in use as it ends; one the listener settles on
@@ -178,7 +178,7 @@ impl Journey<'_> {
         let instance = wgpu::InstanceDescriptor::new_with_display_handle(display);
         let opened = window.inner_size();
         let (gpu, screen) = Screen::open(instance, window.clone(), opened.into())?;
-        let renderer = Renderer::new(&gpu.device, FORMAT, self.size, self.place);
+        let renderer = Renderer::new(&gpu.device, self.size, self.place);
         let picture = Still::new(&gpu.device, self.size);
         self.log.opening = json!({
             "window_size": [opened.width, opened.height],

@@ -4,7 +4,7 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-use common::{f, ffmpeg, ffmpeg_md5, numbers, scratch, skip};
+use common::{ffmpeg, ffmpeg_md5, num, numbers, scratch, skip};
 
 /// Forty seconds at four levels, different in each channel. The levels stay within
 /// 20 LU of each other so that no stretch sits on the edge of the R128 gates.
@@ -85,15 +85,15 @@ fn measured_loudness_agrees_with_ffmpegs_ebu_r128_reading() {
         assert_eq!(heard["channels"], channels);
         let loudness = &heard["loudness"];
         assert!(
-            (f(&loudness["integrated_lufs"]) - reading("I:")).abs() <= 0.1,
+            (num(&loudness["integrated_lufs"]) - reading("I:")).abs() <= 0.1,
             "{loudness} against {summary}"
         );
         assert!(
-            (f(&loudness["range_lu"]) - reading("LRA:")).abs() <= 0.5,
+            (num(&loudness["range_lu"]) - reading("LRA:")).abs() <= 0.5,
             "{loudness} against {summary}"
         );
         assert!(
-            (f(&loudness["sample_peak_dbfs"]) - reading("Peak:")).abs() <= 0.1,
+            (num(&loudness["sample_peak_dbfs"]) - reading("Peak:")).abs() <= 0.1,
             "{loudness} against {summary}"
         );
     }

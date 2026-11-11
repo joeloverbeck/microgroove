@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{rising_and_falling_song, scratch};
+use common::{complaint, rising_and_falling_song, scratch};
 
 /// The three ways to start: a journey by path alone, a journey by name, a silent self-launch.
 const STARTS: [&[&str]; 3] = [&[], &["ride"], &["self-launch"]];
@@ -27,14 +27,6 @@ fn program(command: &[&str], song: &Path, nowhere: &Path) -> Command {
 
 fn start(command: &[&str], song: &Path, nowhere: &Path) -> Output {
     program(command, song, nowhere).output().unwrap()
-}
-
-/// The one plain line a start that cannot go on says, having failed.
-fn complaint(output: &Output) -> String {
-    let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    assert!(!output.status.success(), "expected a non-zero exit");
-    assert_eq!(message.lines().count(), 1, "one plain line: {message:?}");
-    message
 }
 
 #[test]

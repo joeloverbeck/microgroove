@@ -80,12 +80,7 @@ pub fn onsets_and_pulse(spectrum: &Spectrum) -> (Vec<Onset>, Pulse) {
     let reach = (ONSET_SEPARATION_S / spectrum.hop_s).round() as usize;
     let mut onsets = Vec::new();
     for n in 0..rises.len() {
-        let earlier = &rises[n.saturating_sub(reach)..n];
-        let later = &rises[n + 1..(n + reach + 1).min(rises.len())];
-        if excess[n] > 0.0
-            && earlier.iter().all(|r| *r < rises[n])
-            && later.iter().all(|r| *r <= rises[n])
-        {
+        if excess[n] > 0.0 && super::is_peak(&rises, n, reach) {
             // A rise shows once the new sound is far enough into the frame for the
             // window's taper to let it through, so the sound began near the frame's
             // newest edge, not at its centre.

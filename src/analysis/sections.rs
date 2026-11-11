@@ -126,14 +126,7 @@ pub fn hear(levels: &[[f32; BANDS]], hop_s: f64) -> (Vec<f32>, Vec<Boundary>) {
 
     let reach = (SEPARATION_S / hop_s).round() as usize;
     let mut candidates: Vec<usize> = (0..count)
-        .filter(|&i| {
-            let here = change[i];
-            here > 0.0
-                && change[i.saturating_sub(reach)..i].iter().all(|c| *c < here)
-                && change[i + 1..(i + reach + 1).min(count)]
-                    .iter()
-                    .all(|c| *c <= here)
-        })
+        .filter(|&i| change[i] > 0.0 && super::is_peak(&change, i, reach))
         .collect();
     candidates.sort_by(|a, b| change[*b].total_cmp(&change[*a]).then(a.cmp(b)));
 

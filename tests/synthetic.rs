@@ -2,11 +2,7 @@
 //! only and say nothing about fitness for real songs.
 mod common;
 
-use common::{Value, f, numbers, scratch, silence, tone, write_wav};
-
-fn curve(value: &Value) -> Vec<f64> {
-    value.as_array().unwrap().iter().map(f).collect()
-}
+use common::{Value, curve, num, numbers, scratch, silence, tone, write_wav};
 
 fn assert_close(actual: f64, expected: f64, tolerance: f64, what: &str) {
     assert!(
@@ -29,7 +25,7 @@ fn trusted(pulse: &Value) -> Vec<(f64, f64)> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|span| (f(&span["start_s"]), f(&span["end_s"])))
+        .map(|span| (num(&span["start_s"]), num(&span["end_s"])))
         .collect()
 }
 
@@ -52,7 +48,7 @@ fn a_click_sequence_gives_its_onset_times_and_its_pulse_rate() {
     for (onset, click) in onsets.iter().zip(&clicks) {
         assert_close(*onset, *click, 0.005, "onset time of a click");
     }
-    assert_close(f(&heard["pulse"]["bpm"]), 140.0, 1.0, "pulse rate");
+    assert_close(num(&heard["pulse"]["bpm"]), 140.0, 1.0, "pulse rate");
     let spans = trusted(&heard["pulse"]);
     assert!(
         spans
@@ -76,7 +72,12 @@ fn a_rhythm_at_one_and_a_half_times_the_beat_is_not_taken_for_the_pulse() {
     song_with_clicks(&song, 40.0, &[(&beat, 0.4), (&rhythm, 0.8)]);
 
     let heard = numbers(&song, &dir);
-    assert_close(f(&heard["pulse"]["bpm"]), 100.0, 100.0 * 0.02, "pulse rate");
+    assert_close(
+        num(&heard["pulse"]["bpm"]),
+        100.0,
+        100.0 * 0.02,
+        "pulse rate",
+    );
     assert!(
         !trusted(&heard["pulse"]).is_empty(),
         "the beat is trusted somewhere"
@@ -100,7 +101,7 @@ fn silence_followed_by_noise_gives_exactly_one_section_boundary_where_the_noise_
         heard["boundaries"]
     );
     assert_close(boundaries[0], 9.0, 0.25, "boundary time");
-    let confidence = f(&heard["boundaries"][0]["confidence"]);
+    let confidence = num(&heard["boundaries"][0]["confidence"]);
     assert!(
         (0.0..=1.0).contains(&confidence),
         "confidence is a share: {confidence}"
@@ -110,7 +111,7 @@ fn silence_followed_by_noise_gives_exactly_one_section_boundary_where_the_noise_
         .as_array()
         .unwrap()
         .iter()
-        .map(|s| f(&s["start_s"]))
+        .map(|s| num(&s["start_s"]))
         .collect();
     assert_eq!(starts, vec![0.0, boundaries[0]]);
 }
@@ -195,7 +196,7 @@ fn a_signal_in_one_channel_only_is_heard_on_that_side() {
     let heard = numbers(&song, &dir);
     let stereo = &heard["stereo"];
     let (left_level, right_level) = (curve(&stereo["left"]), curve(&stereo["right"]));
-    let per_second = (1.0 / f(&stereo["hop_s"])).round() as usize;
+    let per_second = (1.0 / num(&stereo["hop_s"])).round() as usize;
     assert_eq!(left_level.len(), 8 * per_second);
     for level in &left_level[..4 * per_second] {
         assert_close(
@@ -216,13 +217,13 @@ fn a_signal_in_one_channel_only_is_heard_on_that_side() {
         "the right is silent throughout"
     );
     assert_close(
-        f(&stereo["balance"]),
+        num(&stereo["balance"]),
         -1.0,
         1e-6,
         "balance of a left-only signal",
     );
     assert_close(
-        f(&stereo["width"]),
+        num(&stereo["width"]),
         0.5,
         1e-6,
         "width of a one-sided signal",

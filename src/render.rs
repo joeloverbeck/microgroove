@@ -23,8 +23,10 @@ const AIR_TINT: (f32, f32, f32) = (0.55, 0.08, 0.4);
 const SAMPLES: u32 = 4;
 const NEAR_M: f64 = 1.0;
 const FAR_M: f64 = 60_000.0;
-/// The most impulses drawn at once; the shader's array is this long.
+/// The most impulses drawn at once; the shader's array is this long. With them, the
+/// shader is told this many floats of each moment: a matrix, nine vectors and the rings.
 const MOST_RINGS: usize = 12;
+const UNIFORM_FLOATS: usize = 16 + 4 * 9 + 4 * MOST_RINGS;
 /// Positions reach the GPU relative to a point near the camera, on a grid this coarse,
 /// so that tens of kilometres along the route cost no precision.
 const ORIGIN_GRID_M: f64 = 256.0;
@@ -169,17 +171,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Puts a place on the GPU, to be drawn into targets of one format and size.
-    pub fn new(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        size: Size,
-        place: &Place,
-    ) -> Self {
+    /// Puts a place on the GPU, to be drawn into targets of `FORMAT` and of one size.
+    pub fn new(device: &wgpu::Device, size: Size, place: &Place) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("place.wgsl"));
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: (4 * (16 + 4 * 9 + 4 * MOST_RINGS)) as u64,
+            size: (4 * UNIFORM_FLOATS) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -241,7 +238,7 @@ impl Renderer {
                     entry_point: Some(&format!("{name}_fragment")),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: FORMAT,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -321,7 +318,7 @@ impl Renderer {
                 &bytes(&[lanterns.as_slice(), &[0.0; LANTERN_FLOATS]].concat()),
                 wgpu::BufferUsages::VERTEX,
             ),
-            drawn: texture(device, size, format, SAMPLES).create_view(&Default::default()),
+            drawn: texture(device, size, FORMAT, SAMPLES).create_view(&Default::default()),
             depth: texture(device, size, DEPTH, SAMPLES).create_view(&Default::default()),
             lantern_count: (lanterns.len() / LANTERN_FLOATS) as u32,
             rows,
@@ -401,7 +398,7 @@ impl Renderer {
             let along = impulse.origin_m[1] - origin[1];
             uniforms.extend([across, along, impulse.reach_m, impulse.level].map(|v| v as f32));
         }
-        uniforms.resize(16 + 4 * 9 + 4 * MOST_RINGS, 0.0);
+        uniforms.resize(UNIFORM_FLOATS, 0.0);
         uniforms
     }
 
@@ -642,17 +639,21 @@ impl Still {
             let row = |y: usize| &rows[y * stride..y * stride + width * 4];
             (0..height).flat_map(row).copied().collect::<Vec<u8>>()
         })?;
-        let mut png = Vec::new();
-        let mut encoder = png::Encoder::new(&mut png, self.size.0, self.size.1);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        writer
-            .write_image_data(&rgba)
-            .map_err(|error| error.to_string())?;
-        writer.finish().map_err(|error| error.to_string())?;
-        Ok(png)
+        Ok(png_file(self.size, png::ColorType::Rgba, &rgba))
     }
+}
+
+/// A picture as a PNG file, from its pixels as sRGB bytes, row by row from the top.
+pub fn png_file(size: Size, colour: png::ColorType, pixels: &[u8]) -> Vec<u8> {
+    let mut file = Vec::new();
+    let mut encoder = png::Encoder::new(&mut file, size.0, size.1);
+    encoder.set_color(colour);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    encoder.set_compression(png::Compression::Fast);
+    let written = "a PNG of pixels that match its size can be written to memory";
+    let mut writer = encoder.write_header().expect(written);
+    writer.write_image_data(pixels).expect(written);
+    writer.finish().expect(written);
+    file
 }

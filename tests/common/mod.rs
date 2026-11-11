@@ -64,9 +64,8 @@ pub fn run(song: &Path, out: &Path, options: &[&str]) -> Value {
 
 /// One value for each moment of a run.
 pub fn series(run: &Value, name: &str) -> Vec<f64> {
-    let values = run["series"][name].as_array();
-    let values = values.unwrap_or_else(|| panic!("no series {name}"));
-    values.iter().map(f).collect()
+    assert!(run["series"][name].is_array(), "no series {name}");
+    curve(&run["series"][name])
 }
 
 /// Quiet noise, then loud noise with clicks, then quiet noise again: 24 s.
@@ -209,16 +208,26 @@ pub fn every(first: f64, period: f64, end: f64) -> Vec<f64> {
         .collect()
 }
 
-pub fn f(value: &Value) -> f64 {
+pub fn num(value: &Value) -> f64 {
     value
         .as_f64()
         .unwrap_or_else(|| panic!("expected a number, got {value}"))
 }
 
+/// A list of numbers, such as the values of a curve.
+pub fn curve(list: &Value) -> Vec<f64> {
+    list.as_array().unwrap().iter().map(num).collect()
+}
+
 pub fn times(list: &Value) -> Vec<f64> {
-    list.as_array()
-        .unwrap()
-        .iter()
-        .map(|item| f(&item["time_s"]))
-        .collect()
+    let times = list.as_array().unwrap().iter();
+    times.map(|item| num(&item["time_s"])).collect()
+}
+
+/// The one plain line a command that cannot go on says, having failed.
+pub fn complaint(output: &Output) -> String {
+    let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    assert!(!output.status.success(), "expected a non-zero exit");
+    assert_eq!(message.lines().count(), 1, "one plain line: {message:?}");
+    message
 }

@@ -62,7 +62,7 @@ pub const LANTERN_FLOATS: usize = 5;
 
 /// What a song becomes: the route, the regions along it and the impulses on it.
 pub struct Place {
-    duration_s: f64,
+    pub duration_s: f64,
     hop_s: f64,
     intensity: Vec<f32>,
     /// Intensity as the camera follows it.
@@ -174,10 +174,10 @@ fn ease(share: f64) -> f64 {
 }
 
 /// A curve read at any song time without corners at its steps (Catmull-Rom through the
-/// middle of each step), and its rate of change per second.
-fn read(values: &[f32], hop_s: f64, time_s: f64) -> (f64, f64) {
+/// middle of each step).
+fn read(values: &[f32], hop_s: f64, time_s: f64) -> f64 {
     if values.is_empty() {
-        return (0.0, 0.0);
+        return 0.0;
     }
     let at = |i: isize| f64::from(values[i.clamp(0, values.len() as isize - 1) as usize]);
     let x = time_s / hop_s - 0.5;
@@ -188,9 +188,7 @@ fn read(values: &[f32], hop_s: f64, time_s: f64) -> (f64, f64) {
         2.0 * a - 5.0 * b + 4.0 * c - d,
         3.0 * (b - c) + d - a,
     );
-    let value = b + 0.5 * u * (p + u * (q + u * r));
-    let slope = 0.5 * (p + u * (2.0 * q + 3.0 * u * r)) / hop_s;
-    (value.clamp(0.0, 1.0), slope)
+    (b + 0.5 * u * (p + u * (q + u * r))).clamp(0.0, 1.0)
 }
 
 /// A colour from hue (in turns), saturation and value, as linear light.
@@ -208,7 +206,7 @@ fn hue(brightness: f64) -> f64 {
 }
 
 impl Place {
-    pub fn of(analysis: &Analysis, duration_s: f64) -> Place {
+    pub fn of(analysis: &Analysis) -> Place {
         let hop_s = analysis.intensity.hop_s;
         let intensity = analysis.intensity.values.clone();
         let drive = smooth(&intensity, (DRIVE_SMOOTH_S / hop_s).round() as usize);
@@ -221,7 +219,7 @@ impl Place {
                 pace * mix(
                     SPEED.0,
                     SPEED.1,
-                    read(&intensity, hop_s, step as f64 * hop_s).0,
+                    read(&intensity, hop_s, step as f64 * hop_s),
                 )
             })
             .collect();
@@ -231,7 +229,7 @@ impl Place {
         }
 
         let mut place = Place {
-            duration_s,
+            duration_s: analysis.duration_s,
             hop_s,
             intensity,
             drive,
@@ -287,7 +285,7 @@ impl Place {
                     onset_s: onset.time_s,
                     origin_m: [place.bend(along).0, along],
                     level: (f64::from(onset.strength) / full).min(1.0),
-                    altitude_m: place.altitude(onset.time_s).0,
+                    altitude_m: place.altitude(onset.time_s),
                 }
             })
             .collect();
@@ -341,38 +339,33 @@ impl Place {
         (step as f64 + (route_m - self.distance[step]) / span) * self.hop_s
     }
 
-    /// The route's sideways offset, slope and curvature at a distance along it.
-    fn bend(&self, route_m: f64) -> (f64, f64, f64) {
-        let (mut offset, mut slope, mut curvature) = (0.0, 0.0, 0.0);
+    /// The route's sideways offset and curvature at a distance along it.
+    fn bend(&self, route_m: f64) -> (f64, f64) {
+        let (mut offset, mut curvature) = (0.0, 0.0);
         for (middle, turn, length) in &self.turns {
             let u = ((route_m - middle) / length + 0.5).max(0.0);
             if u >= 1.0 {
                 offset += turn * (route_m - middle);
-                slope += turn;
             } else {
-                // The slope eases in; its integral and its derivative are exact.
+                // The route's slope eases in; its integral and its derivative are exact.
                 let u4 = u * u * u * u;
                 offset += turn * length * u4 * (u * u - 3.0 * u + 2.5);
-                slope += turn * ease(u);
                 curvature += turn * 30.0 * u * u * (1.0 - u) * (1.0 - u) / length;
             }
         }
-        (offset, slope, curvature)
+        (offset, curvature)
     }
 
-    /// Height of the camera above the floor at a song time, and its rate of climb.
-    fn altitude(&self, time_s: f64) -> (f64, f64) {
-        let (drive, slope) = read(&self.drive, self.hop_s, time_s);
-        (
-            mix(ALTITUDE.0, ALTITUDE.1, drive),
-            (ALTITUDE.1 - ALTITUDE.0) * slope,
-        )
+    /// Height of the camera above the floor at a song time.
+    fn altitude(&self, time_s: f64) -> f64 {
+        let drive = read(&self.drive, self.hop_s, time_s);
+        mix(ALTITUDE.0, ALTITUDE.1, drive)
     }
 
     /// Where the camera is at a song time.
     fn flight(&self, time_s: f64) -> [f64; 3] {
         let along = self.distance_at(time_s);
-        [self.bend(along).0, self.altitude(time_s).0, along]
+        [self.bend(along).0, self.altitude(time_s), along]
     }
 
     pub fn moment(&self, song_time_s: f64) -> Moment {
@@ -384,7 +377,7 @@ impl Place {
             ahead[1] - eye[1] - LOOK_DOWN * eye[1],
             ahead[2] - eye[2],
         ];
-        let pull = speed * speed * self.bend(along).2;
+        let pull = speed * speed * self.bend(along).1;
         let first = self
             .impulses
             .partition_point(|i| i.onset_s <= time_s - IMPULSE_LIFE_S);
@@ -399,7 +392,7 @@ impl Place {
                 pitch_deg: toward[1].atan2(toward[0].hypot(toward[2])).to_degrees(),
                 bank_deg: BANK_MAX_DEG * (pull / BANK_PULL).tanh(),
             },
-            light: read(&self.intensity, self.hop_s, time_s).0,
+            light: read(&self.intensity, self.hop_s, time_s),
             accent: self.character(along).0,
             impulses: self.impulses[first..end]
                 .iter()
@@ -463,7 +456,7 @@ impl Place {
         let mut paint = Vec::with_capacity(rows);
         for row in 0..rows {
             let along = row as f64 * ROW_M - BEHIND_M;
-            let intensity = read(&self.intensity, self.hop_s, self.time_at(along)).0;
+            let intensity = read(&self.intensity, self.hop_s, self.time_at(along));
             let (accent, sharpness) = self.character(along);
             let centre = self.bend(along).0;
             let (floor, relief) = (

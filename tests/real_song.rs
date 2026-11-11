@@ -7,7 +7,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use common::{Value, f, inspect, numbers, numbers_bytes, run, scratch, series, skip};
+use common::{Value, inspect, num, numbers, numbers_bytes, run, scratch, series, skip};
 
 /// MD5 of the first-journey song's audio decoded to 24-bit PCM, from issue #1.
 const FIRST_JOURNEY_MD5: &str = "9345b4152173327879c721122c3eb2ba";
@@ -93,7 +93,7 @@ fn pulse_is_132_bpm_where_trusted() {
     let Some(heard) = first_journey("pulse") else {
         return;
     };
-    let bpm = f(&heard["pulse"]["bpm"]);
+    let bpm = num(&heard["pulse"]["bpm"]);
     assert!(
         (bpm - 132.0).abs() <= 132.0 * 0.02,
         "expected 132 BPM within 2%, got {bpm} (198 and 66 are the traps)"
@@ -159,10 +159,10 @@ fn intensity_is_lowest_and_highest_where_the_song_is_and_falls_across_the_bridge
 
 /// The average intensity between two song times.
 fn mean_intensity(heard: &Value, from_s: f64, to_s: f64) -> f64 {
-    let hop_s = f(&heard["intensity"]["hop_s"]);
+    let hop_s = num(&heard["intensity"]["hop_s"]);
     let values = heard["intensity"]["values"].as_array().unwrap();
     let stretch = &values[(from_s / hop_s) as usize..(to_s / hop_s) as usize];
-    stretch.iter().map(f).sum::<f64>() / stretch.len() as f64
+    stretch.iter().map(num).sum::<f64>() / stretch.len() as f64
 }
 
 /// What the owner heard on listening again on 2026-11-11 (comments on issue #1): two
@@ -201,14 +201,14 @@ fn loudness_agrees_with_the_ebu_r128_reading_in_the_issue() {
         ("range_lu", 9.2),
         ("sample_peak_dbfs", -1.1),
     ] {
-        let measured = f(&heard["loudness"][measure]);
+        let measured = num(&heard["loudness"][measure]);
         assert!(
             (measured - expected).abs() <= 0.1,
             "{measure}: expected {expected}, got {measured}"
         );
     }
     assert!(
-        (f(&heard["duration_s"]) - 246.18).abs() <= 0.01,
+        (num(&heard["duration_s"]) - 246.18).abs() <= 0.01,
         "246.18 seconds long"
     );
     assert_eq!(
@@ -219,19 +219,9 @@ fn loudness_agrees_with_the_ebu_r128_reading_in_the_issue() {
 
 #[test]
 fn the_flac_and_the_wav_give_identical_numbers() {
-    if first_journey("flac and wav").is_none() {
+    let Some((song, wav)) = first_journey_song_and_its_wav("flac and wav") else {
         return;
-    }
-    let Some(wav) = std::env::var_os("MICROGROOVE_SONG_WAV")
-        .map(PathBuf::from)
-        .filter(|wav| wav.is_file())
-    else {
-        return skip(
-            "flac and wav",
-            "MICROGROOVE_SONG_WAV is not set to the WAV of the same master",
-        );
     };
-    let song = PathBuf::from(std::env::var_os("MICROGROOVE_SONG").unwrap());
     assert_ne!(
         song.extension(),
         wav.extension(),
@@ -255,20 +245,22 @@ fn first_journey_song(check: &str) -> Option<PathBuf> {
     std::env::var_os("MICROGROOVE_SONG").map(PathBuf::from)
 }
 
+/// The same, with the WAV of the same master, for the checks that set the two side by side.
+fn first_journey_song_and_its_wav(check: &str) -> Option<(PathBuf, PathBuf)> {
+    let song = first_journey_song(check)?;
+    let wav = std::env::var_os("MICROGROOVE_SONG_WAV").map(PathBuf::from);
+    let wav = wav.filter(|wav| wav.is_file());
+    if wav.is_none() {
+        let reason = "MICROGROOVE_SONG_WAV is not set to the WAV of the same master";
+        skip(check, reason);
+    }
+    Some((song, wav?))
+}
+
 #[test]
 fn the_flac_and_the_wav_give_identical_stills() {
-    let check = "stills from flac and wav";
-    let Some(song) = first_journey_song(check) else {
+    let Some((song, wav)) = first_journey_song_and_its_wav("stills from flac and wav") else {
         return;
-    };
-    let Some(wav) = std::env::var_os("MICROGROOVE_SONG_WAV")
-        .map(PathBuf::from)
-        .filter(|wav| wav.is_file())
-    else {
-        return skip(
-            check,
-            "MICROGROOVE_SONG_WAV is not set to the WAV of the same master",
-        );
     };
     // A quiet moment, a loud one, and one a tenth of a second after the surge at 3:31.9.
     let moments = ["--at", "0:10", "--at", "1:50", "--at", "3:32"];
@@ -319,12 +311,12 @@ fn the_most_intense_stretches_stay_within_the_comfort_limits() {
         );
         assert_eq!(stretch["moments_per_second"], 144);
         assert!(
-            f(&stretch["flashes"]["worst_in_any_second"]) < 3.0,
+            num(&stretch["flashes"]["worst_in_any_second"]) < 3.0,
             "full-screen flashes over {from}-{to}: {}",
             stretch["flashes"]
         );
         assert!(
-            f(&stretch["camera"]["worst_reversals_in_any_second"]) <= 2.0,
+            num(&stretch["camera"]["worst_reversals_in_any_second"]) <= 2.0,
             "camera reversals over {from}-{to}: {}",
             stretch["camera"]
         );

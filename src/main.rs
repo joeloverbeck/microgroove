@@ -18,7 +18,7 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 use place::Place;
-use render::{FORMAT, Gpu, Renderer, Size, Still};
+use render::{Gpu, Renderer, Size, Still};
 
 const USAGE: &str = "usage: microgroove [ride] <audio file> [--size <width>x<height>] [--out <directory>]
        microgroove self-launch <audio file> [--from <song time>] [--size <width>x<height>] [--out <directory>]
@@ -213,15 +213,11 @@ fn timeline(request: &Request) -> Result<(), String> {
         sample_rate: song.sample_rate,
         channels: song.channels.len(),
         frames: song.frames(),
-        duration_s: song.duration_s(),
+        duration_s: analysis.duration_s,
         decoded_audio_md5: song.pcm24_md5(),
         analysis: &analysis,
     };
-    write(
-        &out,
-        "timeline.png",
-        timeline::draw(&analysis, song.duration_s()),
-    )?;
+    write(&out, "timeline.png", timeline::draw(&analysis))?;
     write(&out, "analysis.json", json(&numbers, true)?)
 }
 
@@ -238,10 +234,10 @@ fn spread(mut values: Vec<f64>) -> serde_json::Value {
     })
 }
 
-/// The song in a file, how long it is, and the place made from it.
-fn place_of(request: &Request) -> Result<(decode::Song, f64, Place), String> {
+/// The song in a file and the place made from it.
+fn place_of(request: &Request) -> Result<(decode::Song, Place), String> {
     let (song, analysis) = hear(&request.song)?;
-    let end_s = song.duration_s();
+    let end_s = analysis.duration_s;
     let late = [request.from, request.to]
         .into_iter()
         .flatten()
@@ -251,14 +247,14 @@ fn place_of(request: &Request) -> Result<(decode::Song, f64, Place), String> {
             "no moment at {late} s: the song ends at {end_s:.2} s"
         ));
     }
-    let place = Place::of(&analysis, end_s);
+    let place = Place::of(&analysis);
     if let Some(holds_s) = place.outgrows(render::MOST_BUFFER_BYTES) {
         let (song, minutes) = (request.song.display(), holds_s / 60.0);
         return Err(format!(
             "refused {song}: the place cannot hold a song this long yet, only {minutes:.0} minutes of it"
         ));
     }
-    Ok((song, end_s, place))
+    Ok((song, place))
 }
 
 /// Rides the song: full screen, the song playing, until it ends or a key quits.
@@ -273,7 +269,7 @@ fn self_launch(request: &Request) -> Result<(), String> {
 }
 
 fn journey(request: &Request, silent: bool) -> Result<(), String> {
-    let (song, _, place) = place_of(request)?;
+    let (song, place) = place_of(request)?;
     let size = request.size.unwrap_or(DISPLAY);
     let from_s = request.from.unwrap_or(0.0);
     let ridden = journey::ride(song, &place, size, from_s, silent)?;
@@ -307,18 +303,18 @@ fn journey(request: &Request, silent: bool) -> Result<(), String> {
 }
 
 /// The place made from a file, on a GPU with no display, with a picture to draw it into.
-fn prepare(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), String> {
-    let (_, end_s, place) = place_of(request)?;
+fn prepare(request: &Request) -> Result<(Place, Gpu, Renderer, Still), String> {
+    let (_, place) = place_of(request)?;
     let gpu = Gpu::headless()?;
     let size = request.size.unwrap_or(DISPLAY);
-    let renderer = Renderer::new(&gpu.device, FORMAT, size, &place);
+    let renderer = Renderer::new(&gpu.device, size, &place);
     let picture = Still::new(&gpu.device, size);
-    Ok((end_s, place, gpu, renderer, picture))
+    Ok((place, gpu, renderer, picture))
 }
 
 /// Writes a still of each moment asked for, with its numbers.
 fn still(request: &Request) -> Result<(), String> {
-    let (_, place, gpu, renderer, picture) = prepare(request)?;
+    let (place, gpu, renderer, picture) = prepare(request)?;
     let out = request.out.clone().unwrap_or(PathBuf::from(STILLS));
     for at in &request.at {
         let moment = place.moment(*at);
@@ -339,9 +335,10 @@ fn still(request: &Request) -> Result<(), String> {
 /// Draws consecutive moments across a stretch of the song, and writes what they measure:
 /// flashes, camera reversals and the time each took to draw.
 fn run(request: &Request) -> Result<(), String> {
-    let (end_s, place, gpu, renderer, picture) = prepare(request)?;
+    let (place, gpu, renderer, picture) = prepare(request)?;
     let rate = request.rate.unwrap_or(DISPLAY_HZ);
-    let (from_s, to_s) = (request.from.unwrap_or(0.0), request.to.unwrap_or(end_s));
+    let from_s = request.from.unwrap_or(0.0);
+    let to_s = request.to.unwrap_or(place.duration_s);
     let count = ((to_s - from_s) * rate as f64).round() as usize;
     if to_s <= from_s || count == 0 {
         return Err(format!("no moments from {from_s} s to {to_s} s"));

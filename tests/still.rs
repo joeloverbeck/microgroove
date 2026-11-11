@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{Value, f, inspect, json, rising_and_falling_song, scratch, write_wav};
+use common::{Value, inspect, json, num, rising_and_falling_song, scratch, write_wav};
 
 /// Makes a still of each song time in one command. Returns each still and its numbers,
 /// in the order asked. Small stills are enough where only the numbers are judged.
@@ -42,8 +42,8 @@ fn one_command_writes_a_still_and_the_numbers_of_its_moment_with_no_display() {
     );
 
     let moment: Value = json(numbers);
-    assert_eq!(f(&moment["song_time_s"]), 12.5);
-    assert!(f(&moment["route_position_m"]) > 0.0, "{moment}");
+    assert_eq!(num(&moment["song_time_s"]), 12.5);
+    assert!(num(&moment["route_position_m"]) > 0.0, "{moment}");
     for part in ["yaw_deg", "pitch_deg", "bank_deg"] {
         assert!(
             moment["camera"][part].is_number(),
@@ -51,7 +51,7 @@ fn one_command_writes_a_still_and_the_numbers_of_its_moment_with_no_display() {
         );
     }
     assert_eq!(moment["camera"]["position_m"].as_array().unwrap().len(), 3);
-    assert!((0.0..=1.0).contains(&f(&moment["light"])), "{moment}");
+    assert!((0.0..=1.0).contains(&num(&moment["light"])), "{moment}");
     assert!(moment["impulses"].is_array(), "{moment}");
 }
 
@@ -161,11 +161,12 @@ fn an_impulse_is_in_play_from_its_onset_and_dies_away_with_the_time_since() {
     assert_eq!((impulses(1).len(), impulses(2).len()), (1, 1));
     let (early, late) = (&impulses(1)[0], &impulses(2)[0]);
     for (impulse, age) in [(early, 0.05), (late, 0.25)] {
-        assert!((f(&impulse["onset_s"]) - 2.0).abs() <= 0.005, "{impulse}");
-        assert!((f(&impulse["age_s"]) - age).abs() <= 0.005, "{impulse}");
+        assert!((num(&impulse["onset_s"]) - 2.0).abs() <= 0.005, "{impulse}");
+        assert!((num(&impulse["age_s"]) - age).abs() <= 0.005, "{impulse}");
     }
     assert!(
-        f(&late["level"]) < f(&early["level"]) && f(&late["reach_m"]) > f(&early["reach_m"]),
+        num(&late["level"]) < num(&early["level"])
+            && num(&late["reach_m"]) > num(&early["reach_m"]),
         "the impulse fades and runs on: {early} then {late}"
     );
 }

@@ -91,7 +91,8 @@ fn blend(from: Colour, to: Colour, share: f32) -> Colour {
 }
 
 /// Draws the timeline and returns it as a PNG file.
-pub fn draw(analysis: &Analysis, duration_s: f64) -> Vec<u8> {
+pub fn draw(analysis: &Analysis) -> Vec<u8> {
+    let duration_s = analysis.duration_s;
     let bands = analysis
         .band_levels
         .first()
@@ -256,16 +257,6 @@ pub fn draw(analysis: &Analysis, duration_s: f64) -> Vec<u8> {
         );
     }
 
-    let mut png = Vec::new();
-    let mut encoder = png::Encoder::new(&mut png, WIDTH as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder
-        .write_header()
-        .expect("a PNG header can be written to memory");
-    writer
-        .write_image_data(&canvas.pixels)
-        .expect("the pixels match the header");
-    writer.finish().expect("a PNG can be finished in memory");
-    png
+    let size = (WIDTH as u32, height as u32);
+    crate::render::png_file(size, png::ColorType::Rgb, &canvas.pixels)
 }
