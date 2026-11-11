@@ -19,6 +19,8 @@ const SUN_TOWARD: [f64; 3] = [0.3, 0.13, 1.0];
 /// How far the air takes on the accent of the land around the listener, and how bright
 /// that accent is at the zenith and along the horizon.
 const AIR_TINT: (f32, f32, f32) = (0.55, 0.08, 0.4);
+/// Samples to the pixel while drawing, so that edges and fine lines do not crawl.
+const SAMPLES: u32 = 4;
 const NEAR_M: f64 = 1.0;
 const FAR_M: f64 = 60_000.0;
 /// The most impulses drawn at once; the shader's array is this long.
@@ -96,7 +98,18 @@ fn bytes(floats: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-fn texture(device: &wgpu::Device, size: Size, format: wgpu::TextureFormat) -> wgpu::Texture {
+/// A texture to draw into. One with a single sample to the pixel can be read back.
+fn texture(
+    device: &wgpu::Device,
+    size: Size,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+) -> wgpu::Texture {
+    let read = if sample_count == 1 {
+        wgpu::TextureUsages::COPY_SRC
+    } else {
+        wgpu::TextureUsages::empty()
+    };
     device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
@@ -105,10 +118,10 @@ fn texture(device: &wgpu::Device, size: Size, format: wgpu::TextureFormat) -> wg
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | read,
         view_formats: &[],
     })
 }
@@ -123,6 +136,9 @@ pub struct Renderer {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     instances: wgpu::Buffer,
+    /// Where the picture is drawn, several samples to the pixel, before it is resolved
+    /// into the target; and the depth that goes with it.
+    drawn: wgpu::TextureView,
     depth: wgpu::TextureView,
     lantern_count: u32,
     /// Rows of ground, and the indices that draw one of them.
@@ -198,7 +214,10 @@ impl Renderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                    count: SAMPLES,
+                    ..Default::default()
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(&format!("{name}_fragment")),
@@ -284,7 +303,8 @@ impl Renderer {
                 &bytes(&[lanterns.as_slice(), &[0.0; LANTERN_FLOATS]].concat()),
                 wgpu::BufferUsages::VERTEX,
             ),
-            depth: texture(device, size, DEPTH).create_view(&Default::default()),
+            drawn: texture(device, size, format, SAMPLES).create_view(&Default::default()),
+            depth: texture(device, size, DEPTH, SAMPLES).create_view(&Default::default()),
             lantern_count: (lanterns.len() / LANTERN_FLOATS) as u32,
             rows,
             row_indices: (columns - 1) * 6,
@@ -379,12 +399,12 @@ impl Renderer {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: &self.drawn,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target: Some(target),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
+                    store: wgpu::StoreOp::Discard,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -440,7 +460,7 @@ pub struct Still {
 
 impl Still {
     pub fn new(device: &wgpu::Device, size: Size) -> Still {
-        let texture = texture(device, size, FORMAT);
+        let texture = texture(device, size, FORMAT, 1);
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let stride = (size.0 * 4).div_ceil(align) * align;
         Still {

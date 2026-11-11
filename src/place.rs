@@ -16,13 +16,14 @@ const SPEED: (f64, f64) = (32.0, 150.0);
 /// Height of the camera above the floor of the route at the same two intensities.
 const ALTITUDE: (f64, f64) = (10.0, 70.0);
 /// The camera rises and sinks with intensity as it is over about this many seconds.
-const DRIVE_SMOOTH_S: f64 = 2.5;
+const DRIVE_SMOOTH_S: f64 = 3.0;
 /// The camera looks at where it will be this many seconds on, lowered by this share of its height.
 const LOOK_AHEAD_S: f64 = 1.5;
 const LOOK_DOWN: f64 = 0.35;
-/// At a boundary trusted in full the route turns by this slope, over this length.
+/// At a boundary trusted in full the route turns by this slope, and the listener spends
+/// this long in the turn.
 const TURN: f64 = 0.38;
-const TURN_M: f64 = 320.0;
+const TURN_S: f64 = 4.0;
 /// The camera banks into a turn: up to this angle, reaching most of it at this sideways pull.
 const BANK_MAX_DEG: f64 = 26.0;
 const BANK_PULL: f64 = 30.0;
@@ -69,8 +70,9 @@ pub struct Place {
     /// Distance along the route, and speed, at the start of each step of the intensity curve.
     distance: Vec<f64>,
     speed: Vec<f64>,
-    /// Where the route turns (distance of the middle of the turn) and by how much slope.
-    turns: Vec<(f64, f64)>,
+    /// Where the route turns: the distance of the middle of the turn, the change of
+    /// slope, and the length of the turn.
+    turns: Vec<(f64, f64, f64)>,
     regions: Vec<Region>,
     impulses: Vec<Impulse>,
     pub sky: Sky,
@@ -252,14 +254,13 @@ impl Place {
         // the other, by as much as the boundary is trusted.
         let mut heading = 0.0;
         for (index, section) in analysis.sections.iter().enumerate() {
-            let start_m = place.distance_at(section.start_s);
+            let (start_m, speed) = place.travel(section.start_s);
             if index > 0 {
                 let confidence = analysis.boundaries[index - 1].confidence;
                 let side = if index % 2 == 1 { 1.0 } else { -1.0 };
-                place
-                    .turns
-                    .push((start_m, side * TURN * confidence - heading));
-                heading = side * TURN * confidence;
+                let turn = side * TURN * confidence - heading;
+                place.turns.push((start_m, turn, TURN_S * speed));
+                heading += turn;
             }
             place.regions.push(Region {
                 start_s: section.start_s,
@@ -345,17 +346,17 @@ impl Place {
     /// The route's sideways offset, slope and curvature at a distance along it.
     fn bend(&self, route_m: f64) -> (f64, f64, f64) {
         let (mut offset, mut slope, mut curvature) = (0.0, 0.0, 0.0);
-        for (middle, turn) in &self.turns {
-            let u = ((route_m - middle) / TURN_M + 0.5).max(0.0);
+        for (middle, turn, length) in &self.turns {
+            let u = ((route_m - middle) / length + 0.5).max(0.0);
             if u >= 1.0 {
                 offset += turn * (route_m - middle);
                 slope += turn;
             } else {
                 // The slope eases in; its integral and its derivative are exact.
                 let u4 = u * u * u * u;
-                offset += turn * TURN_M * u4 * (u * u - 3.0 * u + 2.5);
+                offset += turn * length * u4 * (u * u - 3.0 * u + 2.5);
                 slope += turn * ease(u);
-                curvature += turn * 30.0 * u * u * (1.0 - u) * (1.0 - u) / TURN_M;
+                curvature += turn * 30.0 * u * u * (1.0 - u) * (1.0 - u) / length;
             }
         }
         (offset, slope, curvature)

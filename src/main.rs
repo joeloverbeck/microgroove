@@ -68,46 +68,6 @@ struct StillNumbers<'a> {
     adapter: &'a str,
 }
 
-/// The numbers of a run of consecutive moments.
-#[derive(Serialize)]
-struct RunNumbers<'a> {
-    from_s: f64,
-    to_s: f64,
-    moments_per_second: usize,
-    size: Size,
-    adapter: &'a str,
-    flashes: Flashes,
-    camera: CameraComfort,
-    draw_ms: DrawTime,
-    series: Series,
-}
-
-/// General flashes (see `comfort`), counted on the mean relative luminance of the whole
-/// picture and of each tile of it.
-#[derive(Serialize)]
-struct Flashes {
-    worst_in_any_second: usize,
-    worst_tile_in_any_second: usize,
-    /// The widest range the whole picture's luminance covers within any one second.
-    widest_range_in_any_second: f32,
-}
-
-#[derive(Serialize)]
-struct CameraComfort {
-    /// The most times any part of the pose turns back on itself within one second.
-    worst_reversals_in_any_second: usize,
-}
-
-/// How long drawing one moment took, submit to finished, over the whole run.
-#[derive(Serialize)]
-struct DrawTime {
-    least: f64,
-    median: f64,
-    p95: f64,
-    p99: f64,
-    max: f64,
-}
-
 /// One value for each moment of a run.
 #[derive(Serialize, Default)]
 struct Series {
@@ -325,62 +285,50 @@ fn run(request: &Request) -> Result<(), String> {
         series.impulses.push(moment.impulses.len());
     }
 
-    let flashes = |luminance: &Vec<f32>| comfort::worst_flashes_in_a_second(luminance, rate);
-    let reversals =
-        |pose: &Vec<f32>, least| comfort::worst_reversals_in_a_second(pose, least, rate);
     let (metres, degrees) = LEAST_REVERSAL;
+    let poses = [
+        (&series.across_m, metres),
+        (&series.up_m, metres),
+        (&series.yaw_deg, degrees),
+        (&series.pitch_deg, degrees),
+        (&series.bank_deg, degrees),
+    ];
+    let reversals =
+        |(pose, least): &(&Vec<f32>, f32)| comfort::worst_reversals_in_a_second(pose, *least, rate);
+    let flashes = |luminance: &Vec<f32>| comfort::worst_flashes_in_a_second(luminance, rate);
     draw_ms.sort_by(f64::total_cmp);
     let share = |of: usize| draw_ms[(count - 1) * of / 100];
-    let numbers = RunNumbers {
-        from_s,
-        to_s,
-        moments_per_second: rate,
-        size: picture.size,
-        adapter: &gpu.adapter,
-        flashes: Flashes {
-            worst_in_any_second: flashes(&series.luminance),
-            worst_tile_in_any_second: tiles.iter().map(flashes).max().unwrap_or(0),
-            widest_range_in_any_second: comfort::widest_range_in_a_second(&series.luminance, rate),
+    // Flashes are counted on the mean relative luminance of the whole picture and of each
+    // tile of it. The camera's worst is over every part of its pose. Drawing is timed
+    // from submitting a moment to the GPU having finished it.
+    let numbers = serde_json::json!({
+        "from_s": from_s,
+        "to_s": to_s,
+        "moments_per_second": rate,
+        "size": picture.size,
+        "adapter": gpu.adapter,
+        "flashes": {
+            "worst_in_any_second": flashes(&series.luminance),
+            "worst_tile_in_any_second": tiles.iter().map(flashes).max(),
+            "widest_luminance_range_in_any_second":
+                comfort::widest_range_in_a_second(&series.luminance, rate),
         },
-        camera: CameraComfort {
-            worst_reversals_in_any_second: [
-                reversals(&series.across_m, metres),
-                reversals(&series.up_m, metres),
-                reversals(&series.yaw_deg, degrees),
-                reversals(&series.pitch_deg, degrees),
-                reversals(&series.bank_deg, degrees),
-            ]
-            .into_iter()
-            .max()
-            .unwrap_or(0),
+        "camera": { "worst_reversals_in_any_second": poses.iter().map(reversals).max() },
+        "draw_ms": {
+            "least": share(0),
+            "median": share(50),
+            "p95": share(95),
+            "p99": share(99),
+            "max": share(100),
         },
-        draw_ms: DrawTime {
-            least: share(0),
-            median: share(50),
-            p95: share(95),
-            p99: share(99),
-            max: share(100),
-        },
-        series,
-    };
+        "series": series,
+    });
     let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));
-    write(
-        &out,
-        &format!("run-{from_s:08.3}-{to_s:08.3}.json"),
-        json(&numbers, false)?,
-    )?;
+    let name = format!("run-{from_s:08.3}-{to_s:08.3}.json");
+    write(&out, &name, json(&numbers, false)?)?;
     println!(
-        "{count} moments at {rate} a second, {}x{}: at most {} full-screen flashes in any second ({} in the worst tile; luminance moves at most {:.3} in a second); at most {} camera reversals in any second; drawing took {:.2} ms (median), {:.2} (95th percentile), {:.2} (99th), {:.2} (longest)",
-        numbers.size.0,
-        numbers.size.1,
-        numbers.flashes.worst_in_any_second,
-        numbers.flashes.worst_tile_in_any_second,
-        numbers.flashes.widest_range_in_any_second,
-        numbers.camera.worst_reversals_in_any_second,
-        numbers.draw_ms.median,
-        numbers.draw_ms.p95,
-        numbers.draw_ms.p99,
-        numbers.draw_ms.max,
+        "{count} moments at {rate} a second: flashes {}, camera {}, draw_ms {}",
+        numbers["flashes"], numbers["camera"], numbers["draw_ms"]
     );
     Ok(())
 }

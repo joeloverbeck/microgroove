@@ -29,9 +29,9 @@ fn light() -> f32 {
     return mix(LEAST_LIGHT, 1.0, moment.origin.w);
 }
 
-// The sky in a direction, before the song's light is applied: a bright band along the
+// The air in a direction, before the song's light is applied: a bright band along the
 // horizon under a dark zenith, and a low sun with a wide glow.
-fn sky(toward: vec3<f32>) -> vec3<f32> {
+fn air(toward: vec3<f32>) -> vec3<f32> {
     let height = clamp(toward.y, 0.0, 1.0);
     let sun = max(dot(toward, moment.sun_toward.xyz), 0.0);
     return mix(moment.horizon.rgb, moment.zenith.rgb, 1.0 - exp(-4.5 * height))
@@ -56,6 +56,15 @@ fn noise(p: vec2<f32>) -> f32 {
         mix(lattice(cell + vec2<i32>(0, 1)), lattice(cell + vec2<i32>(1, 1)), u.x),
         u.y,
     );
+}
+
+// The sky: the air, with long thin clouds lying low over the horizon, dark against it
+// and lit where the sun is behind them. They are fixed in the sky, like the sun.
+fn sky(toward: vec3<f32>) -> vec3<f32> {
+    let streak = noise(vec2<f32>(atan2(toward.x, toward.z) * 5.0, toward.y * 55.0));
+    let cloud = smoothstep(0.5, 0.85, streak) * smoothstep(0.01, 0.06, toward.y) * (1.0 - smoothstep(0.1, 0.4, toward.y));
+    let sun = max(dot(toward, moment.sun_toward.xyz), 0.0);
+    return mix(air(toward), moment.zenith.rgb * 0.7 + moment.sun.rgb * 0.6 * pow(sun, 6.0), 0.6 * cloud);
 }
 
 struct SkyOut {
@@ -95,18 +104,23 @@ fn ground_vertex(
 
 @fragment
 fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
-    let normal = normalize(in.normal);
     let from_eye = in.place - moment.eye.xyz;
     let range = length(from_eye);
     let toward = from_eye / range;
     let accent = in.paint.rgb;
     let across = in.place.xz + moment.origin.xz;
 
-    // Dark, grained matter lit by the low sun and the sky. Grain too fine to draw fades out.
-    let grain = mix(0.5, noise(across / 9.0), clamp(1.0 - range / 900.0, 0.0, 1.0));
-    // Level ground lies wet and dark.
-    let wet = smoothstep(0.86, 0.995, normal.y);
-    let matter = mix(vec3<f32>(0.05), accent * 0.32, 0.7) * (0.6 + 0.8 * grain) * (1.0 - 0.6 * wet);
+    // Level ground lies wet, dark and smooth. Slopes are rough and grained, at a scale
+    // finer than the ground's triangles; roughness too fine to draw fades out.
+    let shape = normalize(in.normal);
+    let wet = smoothstep(0.86, 0.995, shape.y);
+    let near = clamp(1.0 - range / 1500.0, 0.0, 1.0) * (1.0 - wet);
+    // Height shifts the grain, so that it does not smear down a steep slope.
+    let rough = (across + in.place.y * vec2<f32>(1.3, 0.7)) / 7.0;
+    let grain = noise(rough);
+    let tilt = vec2<f32>(noise(rough + vec2<f32>(0.3, 0.0)), noise(rough + vec2<f32>(0.0, 0.3))) - grain;
+    let normal = normalize(shape - vec3<f32>(tilt.x, 0.0, tilt.y) * 1.5 * near);
+    let matter = mix(vec3<f32>(0.05), accent * 0.32, 0.7) * (1.0 + 0.8 * (grain - 0.5) * near) * (1.0 - 0.6 * wet);
     let sunlit = max(dot(normal, moment.sun_toward.xyz), 0.0);
     var colour = matter
         * (moment.sun.rgb * sunlit * 2.2 + moment.zenith.rgb * (0.5 + 0.5 * normal.y) * 1.6 + moment.horizon.rgb * 0.25);
@@ -140,7 +154,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     }
 
     // Distance fades the land into the sky that stands behind it.
-    let behind = sky(normalize(vec3<f32>(toward.x, max(toward.y, 0.0) + 0.03, toward.z))) * light();
+    let behind = air(normalize(vec3<f32>(toward.x, max(toward.y, 0.0) + 0.03, toward.z))) * light();
     return vec4<f32>(mix(behind, colour, exp(-range * moment.eye.w)), 1.0);
 }
 
