@@ -186,22 +186,22 @@ fn inside(moment: &Value, form: &Value) -> f64 {
 }
 
 #[test]
-fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_that_leaves_the_picture_as_they_sound()
+fn onsets_that_stand_out_get_a_form_for_their_part_on_their_side_that_leaves_the_picture_as_they_sound()
  {
     let dir = scratch("land-forms");
     let song = dir.join("strikes.wav");
     // Four low thumps, four middle bursts and four high clicks a second apart, with a
-    // faint one of each kind among them. The middle burst at 9 s is in the left channel
+    // faint one of each part among them. The middle burst at 9 s is in the left channel
     // only, with the power the others have in their two channels together. Under the
     // last of them a steady high tone has come in too gently to be an onset, so that the
     // song is quiet and then loud: a slow passage and a fast one.
-    let kinds = [
+    let parts = [
         ("low", 80.0, 2.0),
         ("middle", 1000.0, 3.0),
         ("high", 8000.0, 4.0),
     ];
     let (mut left, mut right) = (silence(16.0), silence(16.0));
-    for (_, hz, first_s) in kinds {
+    for (_, hz, first_s) in parts {
         for at_s in common::every(first_s, 3.0, 14.0) {
             if at_s == 9.0 {
                 strike(&mut left, at_s, hz, 0.6 * std::f32::consts::SQRT_2);
@@ -234,14 +234,14 @@ fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_that_leaves_the_
     let found: Vec<(f64, &str, &str)> = forms
         .iter()
         .map(|form| {
-            let (kind, side) = (form["kind"].as_str(), form["side"].as_str());
-            (num(&form["onset_s"]).round(), kind.unwrap(), side.unwrap())
+            let (part, side) = (form["part"].as_str(), form["side"].as_str());
+            (num(&form["onset_s"]).round(), part.unwrap(), side.unwrap())
         })
         .collect();
     let expected: Vec<(f64, &str, &str)> = (2..14)
         .map(|second| {
             let side = if second == 9 { "left" } else { "centre" };
-            (f64::from(second), kinds[(second as usize - 2) % 3].0, side)
+            (f64::from(second), parts[(second as usize - 2) % 3].0, side)
         })
         .collect();
     assert_eq!(
@@ -267,7 +267,7 @@ fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_that_leaves_the_
             form["onset_s"]
         );
     }
-    // The strikes at 2, 3 and 4 s are one of each kind, and so are those at 10, 11 and 12 s.
+    // The strikes at 2, 3 and 4 s are one of each part, and so are those at 10, 11 and 12 s.
     let speed = |strike: usize| num(&passing[2 * strike + 1]["speed_m_s"]);
     for slow in 0..3 {
         let (slow, fast) = (speed(slow), speed(slow + 8));

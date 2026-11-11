@@ -192,7 +192,8 @@ struct Impulse {
     /// Height of the camera as it passes, and half the width of the floor there.
     altitude_m: f64,
     floor_m: f64,
-    /// The kind of form, by the part of the sound that jumped, and the side it stands on.
+    /// The part of the sound that jumped, which makes it a rib, stones or masts, and the
+    /// side it stands on.
     form: Option<(Part, Side)>,
     /// The boxes the form stands as: see `Place::stood`.
     boxes: Vec<[f64; FORM_FLOATS]>,
@@ -356,7 +357,7 @@ pub struct ImpulseInPlay {
 pub struct FormInView {
     /// The song time of its onset, as which the last of it leaves the picture.
     pub onset_s: f64,
-    pub kind: Part,
+    pub part: Part,
     pub side: Side,
     /// The boxes it stands as, one on each side it stands on: the middle of its foot
     /// (across, up, along), half its width, its height and half its depth along the route.
@@ -709,9 +710,9 @@ impl Place {
                 })
                 .collect(),
             forms: forms(first..seen.max(end))
-                .map(|(impulse, (kind, side))| FormInView {
+                .map(|(impulse, (part, side))| FormInView {
                     onset_s: impulse.onset_s,
-                    kind,
+                    part,
                     side,
                     boxes_m: impulse.boxes.clone(),
                 })
