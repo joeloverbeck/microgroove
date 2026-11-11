@@ -59,18 +59,31 @@ const OWN: f32 = 3.0;
 /// What a channel has that the other has not counts this many times over, so that the
 /// two sides of a song mixed nearly alike are not mirror images.
 const APART: f32 = 3.0;
-/// A band at full strength stands this tall at the far edge of the land, and nearer the
-/// route by this power of the distance. Strength counts by a power between these two:
-/// the first where the region is rounded, the second where it is sharp.
-const RELIEF_M: f64 = 1500.0;
-const SWEEP: f64 = 0.75;
-const CREST: (f64, f64) = (1.5, 3.0);
+/// A region's kind carves the land out of the song's spectrum. For still water, dunes,
+/// terraced rock and ice in turn: how tall a band at full strength stands at the far edge
+/// of the land; the power of the distance by which it stands lower nearer the route; the
+/// power strength counts by, from rounded to sharp; and how far fixed noise makes a band
+/// stronger or weaker, in shapes of the size after it and smaller. That noise is left
+/// only as grain. Below zero it only weakens: it cuts creases, and what stands between
+/// them is a sharp ridge, the crest of a dune or an edge of ice.
+const CARVED: [(f64, f64, f64, f64, f64); 4] = [
+    (1500.0, 0.75, 1.5, 0.25, 150.0),
+    (800.0, 0.75, 1.3, -0.45, 500.0),
+    (1500.0, 0.55, 1.1, 0.3, 150.0),
+    (1500.0, 0.75, 3.0, -0.8, 150.0),
+];
+/// Still water floods the land this deep: only what stands taller shows, as islands.
+const FLOOD_M: f64 = 9.0;
+/// Terraced rock stands in steps. Its first tread lies this high and each next one this
+/// many times higher, the same everywhere in the place; the last share of each step is
+/// its riser.
+const TREAD_M: (f64, f64) = (8.0, 1.6);
+const RISER: f64 = 0.3;
+/// How thick the air is over each kind, of the place's own: clear over still water and
+/// over rock, dust over the dunes, a mist over the ice.
+const AIR: [f32; 4] = [0.7, 2.2, 0.8, 1.3];
 /// The size of the swell of the floor.
 const LANDFORM_M: f64 = 800.0;
-/// Fixed noise is left only as grain: it makes the land this much taller or lower, in
-/// shapes this size and smaller.
-const GRAIN: f64 = 0.35;
-const GRAIN_M: f64 = 150.0;
 /// The ground is laid in rows this far apart, from this far behind the start to this far
 /// beyond the end, and reaches this far to either side of the route.
 pub const ROW_M: f64 = 10.0;
@@ -100,12 +113,20 @@ const FORMS: [(f64, f64, f64, (f64, f64)); 3] = [
 const SUNK_M: f64 = 3.0;
 /// An onset this strong among the song's own onsets gives an impulse at full level.
 const FULL_LEVEL_PERCENTILE: usize = 90;
-/// A section fuller than this makes rounded land; the thinner its sound, the sharper its land.
-const SHARP_BELOW: f64 = 0.8;
+/// What chooses a region's kind: its section is quiet below this intensity and loud from
+/// that one, dark below this brightness, and thin below this fullness. Each is set in a
+/// gap between the first-journey song's sections.
+const QUIET_BELOW: f64 = 0.3;
+const LOUD_FROM: f64 = 0.55;
+const DARK_BELOW: f64 = 0.4;
+const THIN_BELOW: f64 = 0.5;
+/// A last section shorter than this is the song's tail, and takes the kind before it.
+const TAIL_S: f64 = 4.0;
 
-/// Floats per ground vertex: position, normal, accent colour, glow, and how far past
-/// the floor's edge it lies, in metres: below zero on the left, zero on the floor.
-pub const VERTEX_FLOATS: usize = 11;
+/// Floats per ground vertex: position, normal, accent colour, glow, how far past the
+/// floor's edge it lies, in metres (below zero on the left, zero on the floor), and how
+/// far it is each kind of place.
+pub const VERTEX_FLOATS: usize = 15;
 /// Floats per lantern: position, level, radius.
 pub const LANTERN_FLOATS: usize = 5;
 /// Floats per box of a form: see `Place::forms`.
@@ -138,9 +159,8 @@ pub struct Place {
 struct Region {
     start_s: f64,
     start_m: f64,
+    kind: Kind,
     accent: [f32; 3],
-    /// From rounded (0) to sharp (1) landforms.
-    sharpness: f32,
 }
 
 /// The place's answer to one onset, standing where the route is as the onset sounds: a
@@ -154,6 +174,30 @@ struct Impulse {
     floor_m: f64,
     /// The kind of form, by the part of the sound that jumped, and the side it stands on.
     form: Option<(Part, Side)>,
+}
+
+/// What kind of place a region is. Its section's own sound chooses it: still water where
+/// the song is at rest, whatever its sound; terraced rock where it is loud and dark; ice
+/// where it is thin and not dark; dunes everywhere else.
+#[derive(Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Water,
+    Dunes,
+    Rock,
+    Ice,
+}
+
+impl Kind {
+    fn of(section: &Section) -> Kind {
+        let dark = section.brightness < DARK_BELOW;
+        match section.intensity {
+            intensity if intensity < QUIET_BELOW => Kind::Water,
+            intensity if dark && intensity >= LOUD_FROM => Kind::Rock,
+            _ if !dark && section.fullness < THIN_BELOW => Kind::Ice,
+            _ => Kind::Dunes,
+        }
+    }
 }
 
 /// Where a form stands: on the side of the channel its onset is louder in, or on both.
@@ -191,8 +235,9 @@ pub struct Moment {
     pub song_time_s: f64,
     /// Distance travelled along the route.
     pub route_position_m: f64,
-    /// The region the listener is in, counted from 0.
+    /// The region the listener is in, counted from 0, and the kind of place it is.
     pub region: usize,
+    pub kind: Kind,
     pub camera: Camera,
     /// From 0 to 1: how much light the song gives the place now.
     pub light: f64,
@@ -205,8 +250,10 @@ pub struct Moment {
     /// How many times nearer the ground the dial has brought the camera, and with it
     /// the lanterns and rings, which are sized to its height: 1 with the dial at rest.
     pub nearer: f64,
-    /// The accent colour of the land around the listener, which tints the air.
+    /// The accent colour of the land around the listener, which tints the air, and how
+    /// thick the air is there, of the place's own: each kind of place has its air.
     pub accent: [f32; 3],
+    pub air: f32,
     pub land: Profile,
     /// The impulses in play, oldest first: the forms whose onsets have just sounded.
     pub impulses: Vec<ImpulseInPlay>,
@@ -259,6 +306,8 @@ pub struct FormInView {
 pub struct Summary {
     pub route_length_m: f64,
     pub regions: usize,
+    /// The kind of place each region is, in song order.
+    pub kinds: Vec<Kind>,
     pub impulses: usize,
     pub forms: usize,
 }
@@ -374,14 +423,20 @@ impl Place {
         let region = |section: &Section| Region {
             start_s: section.start_s,
             start_m: place.distance_at(section.start_s),
+            kind: Kind::of(section),
             accent: colour(
                 hue(section.brightness),
                 mix(0.55, 1.0, section.fullness),
                 1.0,
             ),
-            sharpness: ((SHARP_BELOW - section.fullness) / 0.5).clamp(0.0, 1.0) as f32,
         };
         place.regions = analysis.sections.iter().map(region).collect();
+        // The song dying away is not a place of its own.
+        if let [.., before, tail] = place.regions.as_mut_slice()
+            && analysis.duration_s - tail.start_s < TAIL_S
+        {
+            tail.kind = before.kind;
+        }
         place.land = place.raised(&analysis.side_levels);
 
         let mut strengths: Vec<f32> = analysis.onsets.iter().map(|onset| onset.strength).collect();
@@ -415,6 +470,7 @@ impl Place {
         Summary {
             route_length_m: self.distance_at(self.duration_s),
             regions: self.regions.len(),
+            kinds: self.regions.iter().map(|region| region.kind).collect(),
             impulses: self.impulses.len(),
             forms: self.impulses.iter().filter(|i| i.form.is_some()).count(),
         }
@@ -509,10 +565,13 @@ impl Place {
             let impulses = self.impulses[impulses].iter();
             impulses.filter_map(|impulse| Some((impulse, impulse.form?)))
         };
+        let region = self.regions.partition_point(|r| r.start_s <= time_s).max(1) - 1;
+        let (accent, kinds) = self.character(along);
         Moment {
             song_time_s: time_s,
             route_position_m: along,
-            region: self.regions.partition_point(|r| r.start_s <= time_s).max(1) - 1,
+            region,
+            kind: self.regions[region].kind,
             camera: Camera {
                 position_m: eye,
                 yaw_deg: slope.atan().to_degrees(),
@@ -523,10 +582,11 @@ impl Place {
             },
             light,
             speed_m_s: speed,
-            over_ground_per_s: speed / (eye[1] - f64::from(swell(eye[0] as f32, along as f32))),
+            over_ground_per_s: speed / (eye[1] - f64::from(self.level(eye[0], along))),
             past_land_per_s: speed / scale(FLOOR_M, light),
             nearer,
-            accent: self.character(along).0,
+            accent,
+            air: kinds.iter().zip(AIR).map(|(kind, air)| kind * air).sum(),
             land: self.profile(along, light),
             impulses: forms(first..end)
                 .map(|(impulse, (_, side))| {
@@ -555,9 +615,16 @@ impl Place {
     /// along, level, radius.
     pub fn lanterns(&self) -> Vec<f32> {
         let lantern = |i: &Impulse| {
-            let [x, z] = i.origin_m.map(|m| m as f32);
+            let [x, z] = i.origin_m;
             let radius = i.altitude_m * (0.02 + 0.06 * i.level);
-            [x, swell(x, z), z, i.level as f32, radius as f32]
+            let lantern = [x as f32, self.level(x, z), z as f32];
+            [
+                lantern[0],
+                lantern[1],
+                lantern[2],
+                i.level as f32,
+                radius as f32,
+            ]
         };
         let lesser = self.impulses.iter().filter(|i| i.form.is_none());
         lesser.flat_map(lantern).collect()
@@ -579,7 +646,7 @@ impl Place {
                 Side::Right => &[1.0],
             };
             let ([x, z], floor) = (impulse.origin_m, impulse.floor_m);
-            let foot = f64::from(swell(x as f32, z as f32)) - SUNK_M;
+            let foot = f64::from(self.level(x, z)) - SUNK_M;
             let height = mix(tall.0, tall.1, impulse.level) * floor + SUNK_M;
             for toward in sides {
                 let x = x + toward * out * floor;
@@ -590,18 +657,28 @@ impl Place {
         boxes
     }
 
-    /// The accent colour and sharpness of the land at a distance along the route: each
-    /// region's own, taking over from the one before across its boundary.
-    fn character(&self, route_m: f64) -> ([f32; 3], f32) {
-        let mut character = (self.regions[0].accent, self.regions[0].sharpness);
+    /// The accent colour of the land at a distance along the route, and how far it is each
+    /// kind of place, in the order of `Kind`: each region's own, taking over from the one
+    /// before across its boundary.
+    fn character(&self, route_m: f64) -> ([f32; 3], [f32; 4]) {
+        let mut character = (self.regions[0].accent, [0.0; 4]);
+        character.1[self.regions[0].kind as usize] = 1.0;
         for region in &self.regions[1..] {
             let share = ease((route_m - region.start_m) / BLEND_M + 0.5) as f32;
             for (channel, accent) in character.0.iter_mut().zip(region.accent) {
                 *channel += (accent - *channel) * share;
             }
-            character.1 += (region.sharpness - character.1) * share;
+            for (kind, weight) in character.1.iter_mut().enumerate() {
+                *weight += (f32::from(kind == region.kind as usize) - *weight) * share;
+            }
         }
         character
+    }
+
+    /// The height of the floor and of all level ground at a point of the place: its swell,
+    /// which still water lies flat over.
+    fn level(&self, x: f64, z: f64) -> f32 {
+        swell(x as f32, z as f32) * (1.0 - self.character(z).1[Kind::Water as usize])
     }
 
     /// Rows the ground is laid in.
@@ -672,27 +749,50 @@ impl Place {
     }
 
     /// The height of the land above the floor on a row of ground, on the left (0) or the
-    /// right (1), so far past the floor's edge.
-    fn stands(&self, row: usize, side: usize, beyond_m: f64, sharpness: f32) -> f64 {
+    /// right (1), so far past the floor's edge: the song's spectrum, carved as each kind
+    /// of place the ground is there carves it. `grain` is each kind's fixed noise there,
+    /// from -0.5 to 0.5.
+    fn stands(
+        &self,
+        row: usize,
+        side: usize,
+        beyond_m: f64,
+        kinds: [f32; 4],
+        grain: [f64; 4],
+    ) -> f64 {
         if beyond_m <= 0.0 {
             return 0.0;
         }
         let strength = through(&self.land[row][side], 1.0, band_at(beyond_m) + 0.5).max(0.0);
-        let crest = mix(CREST.0, CREST.1, f64::from(sharpness));
-        // The land climbs out of the floor over the reach of the lowest band.
-        RELIEF_M
-            * (beyond_m / HALF_WIDTH_M).powf(SWEEP)
-            * ease(beyond_m / band_m(0.0))
-            * strength.powf(crest)
+        let carved = |kind: usize| {
+            let (relief, sweep, crest, grained, _) = CARVED[kind];
+            let grain = if grained < 0.0 {
+                2.0 * grain[kind].abs()
+            } else {
+                grain[kind]
+            };
+            // The land climbs out of the floor over the reach of the lowest band.
+            let height = relief
+                * (beyond_m / HALF_WIDTH_M).powf(sweep)
+                * ease(beyond_m / band_m(0.0))
+                * (strength * (1.0 + grained * grain)).powf(crest);
+            match kind {
+                0 => (height - FLOOD_M).max(0.0),
+                2 => terraced(height),
+                _ => height,
+            }
+        };
+        let of = |kind: usize| f64::from(kinds[kind]) * carved(kind);
+        (0..4).filter(|kind| kinds[*kind] > 0.0).map(of).sum()
     }
 
     /// The land across the route at a distance along it, where the song's intensity is as given.
     fn profile(&self, route_m: f64, intensity: f64) -> Profile {
         let row = row_at(route_m + ROW_M / 2.0).min(self.land.len() - 1);
-        let sharpness = self.character(route_m).1;
+        let kinds = self.character(route_m).1;
         let side = |side: usize| {
             (0..BANDS)
-                .map(|band| self.stands(row, side, band_m(band as f64), sharpness))
+                .map(|band| self.stands(row, side, band_m(band as f64), kinds, [0.0; 4]))
                 .collect()
         };
         Profile {
@@ -714,21 +814,29 @@ impl Place {
             let along = row as f64 * ROW_M - BEHIND_M;
             let time_s = self.time_at(along);
             let intensity = read(&self.intensity, self.hop_s, time_s);
-            let (accent, sharpness) = self.character(along);
+            let (accent, kinds) = self.character(along);
             let centre = self.across(time_s);
             let floor = scale(FLOOR_M, intensity);
+            let dry = 1.0 - kinds[Kind::Water as usize];
             for column in 0..COLUMNS {
                 // Columns crowd toward the route, where the camera is.
                 let across = crowd(column as f64 / (COLUMNS - 1) as f64 * 2.0 - 1.0);
                 let x = centre + across;
                 let beyond = (across.abs() - floor).max(0.0);
-                let grain = fractal((x / GRAIN_M) as f32, (along / GRAIN_M) as f32);
-                let height = self.stands(row, usize::from(across > 0.0), beyond, sharpness)
-                    * (1.0 + GRAIN * (f64::from(grain) - 0.5))
-                    + f64::from(swell(x as f32, along as f32));
-                positions.push([x as f32, height as f32, along as f32]);
+                let grain = std::array::from_fn(|kind| {
+                    let size = CARVED[kind].4;
+                    let noise = || fractal((x / size) as f32, (along / size) as f32) - 0.5;
+                    f64::from(if kinds[kind] > 0.0 { noise() } else { 0.0 })
+                });
+                let side = usize::from(across > 0.0);
+                let height = self.stands(row, side, beyond, kinds, grain) as f32
+                    + dry * swell(x as f32, along as f32);
+                positions.push([x as f32, height, along as f32]);
                 let beyond = beyond.copysign(across) as f32;
-                paint.push([accent[0], accent[1], accent[2], intensity as f32, beyond]);
+                let [red, green, blue] = accent;
+                let [water, dunes, rock, ice] = kinds;
+                let intensity = intensity as f32;
+                paint.push([red, green, blue, intensity, beyond, water, dunes, rock, ice]);
             }
         }
 
@@ -782,6 +890,19 @@ fn band_at(beyond_m: f64) -> f64 {
         .unwrap_or(BANDS - 1);
     let (near, far) = (band_m(above as f64 - 1.0), band_m(above as f64));
     above as f64 - 1.0 + (beyond_m - near) / (far - near)
+}
+
+/// A height as terraced rock has it: level on the tread at or below it, and climbing to
+/// the next tread over the last share of the step between them.
+fn terraced(height: f64) -> f64 {
+    let step = (height / TREAD_M.0).ln() / TREAD_M.1.ln();
+    if step <= 0.0 {
+        return height;
+    }
+    TREAD_M.0
+        * TREAD_M
+            .1
+            .powf(step.floor() + ease((step.fract() - 1.0 + RISER) / RISER))
 }
 
 /// The gentle rise and fall of the ground everywhere, the floor of the route included.

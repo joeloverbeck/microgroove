@@ -3,18 +3,7 @@
 //! by construction, judged by the numbers beside a still.
 mod common;
 
-use std::path::Path;
-
-use common::{Value, curve, inspect, json, num, scratch, silence, write_wav};
-
-/// The numbers of a small still at each song time, in the order asked.
-fn moments(song: &Path, out: &Path, times: &[&str]) -> Vec<Value> {
-    let mut options: Vec<&str> = times.iter().flat_map(|time| ["--at", time]).collect();
-    options.extend(["--size", "320x180"]);
-    let written = inspect("still", song, out, &options);
-    assert_eq!(written.len(), 2 * times.len(), "{written:?}");
-    written.chunks(2).map(|pair| json(&pair[1])).collect()
-}
+use common::{Value, curve, moments, num, scratch, silence, write_wav};
 
 /// The land's profile across the route at the listener's position: its height in metres
 /// on the left and on the right, from beside the route outwards.

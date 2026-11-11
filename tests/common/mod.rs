@@ -49,6 +49,15 @@ pub fn inspect(command: &str, song: &Path, out: &Path, options: &[&str]) -> Vec<
     files.map(PathBuf::from).collect()
 }
 
+/// The numbers of a small still at each song time, in the order asked.
+pub fn moments(song: &Path, out: &Path, times: &[&str]) -> Vec<Value> {
+    let mut options: Vec<&str> = times.iter().flat_map(|time| ["--at", time]).collect();
+    options.extend(["--size", "320x180"]);
+    let written = inspect("still", song, out, &options);
+    assert_eq!(written.len(), 2 * times.len(), "{written:?}");
+    written.chunks(2).map(|pair| json(&pair[1])).collect()
+}
+
 pub fn json(file: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
 }

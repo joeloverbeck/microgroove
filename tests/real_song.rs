@@ -311,6 +311,31 @@ fn the_flac_and_the_wav_give_identical_stills() {
     }
 }
 
+/// Issue #8. The groundwork on that issue grouped the song's fourteen sections like with
+/// like, outside the program and from more measurements than the program takes: A B B B C
+/// D C C B C A C C, and the two-second tail, which takes the kind of the region before it.
+/// Sections it grouped together are one kind of place, and sections it kept apart are not,
+/// so the kind changes at 8 of the 13 boundaries.
+#[test]
+fn sections_that_sound_alike_are_the_same_kind_of_place_and_the_others_are_not() {
+    let Some(song) = first_journey_song("kinds of place") else {
+        return;
+    };
+    let grouped: Vec<char> = "ABBBCDCCBCACCC".chars().collect();
+    let options = ["--at", "0:10", "--size", "320x180"];
+    let written = inspect("still", &song, &scratch("real-kinds"), &options);
+    let kinds = common::json(&written[1])["place"]["kinds"].clone();
+    let kinds = kinds.as_array().expect("a kind for each region");
+    assert_eq!(kinds.len(), grouped.len(), "{kinds:?}");
+    for (one, other) in (0..kinds.len()).flat_map(|one| (0..one).map(move |other| (one, other))) {
+        assert_eq!(
+            kinds[one] == kinds[other],
+            grouped[one] == grouped[other],
+            "regions {other} and {one}, counted from 0, of {kinds:?}"
+        );
+    }
+}
+
 /// A run of the whole first-journey song at 50 moments a second, for the checks on its motion.
 fn whole_run(check: &str) -> Option<&'static Value> {
     static RUN: OnceLock<Value> = OnceLock::new();

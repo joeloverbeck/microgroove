@@ -259,7 +259,7 @@ impl Renderer {
         let vertex = wgpu::VertexBufferLayout {
             array_stride: (4 * VERTEX_FLOATS) as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32, 4 => Float32x4],
         };
         let lantern = wgpu::VertexBufferLayout {
             array_stride: (4 * LANTERN_FLOATS) as u64,
@@ -391,7 +391,8 @@ impl Renderer {
         let shown = &moment.impulses[moment.impulses.len().saturating_sub(MOST_LIGHTS)..];
         let mut uniforms: Vec<f64> = [column(0), column(1), column(2), last].concat();
         uniforms.extend([origin[0], 0.0, origin[1], moment.light]);
-        uniforms.extend([eye[0], eye[1], eye[2], f64::from(self.haze_per_m)]);
+        let haze = self.haze_per_m * moment.air;
+        uniforms.extend([eye[0], eye[1], eye[2], f64::from(haze)]);
         uniforms.extend(right.map(|part| part * half.0));
         uniforms.push(shown.len() as f64);
         uniforms.extend(up.map(|part| part * half.1));
