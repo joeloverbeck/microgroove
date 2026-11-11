@@ -156,8 +156,8 @@ pub struct Renderer {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     /// The boxes of the forms and the lanterns, and how many there are of each.
-    boxes: wgpu::Buffer,
-    instances: wgpu::Buffer,
+    form_instances: wgpu::Buffer,
+    lantern_instances: wgpu::Buffer,
     form_count: u32,
     /// Where the picture is drawn, several samples to the pixel, before it is resolved
     /// into the target; and the depth that goes with it.
@@ -327,8 +327,8 @@ impl Renderer {
                     .collect::<Vec<u8>>(),
                 wgpu::BufferUsages::INDEX,
             ),
-            boxes: instances(&forms),
-            instances: instances(&lanterns),
+            form_instances: instances(&forms),
+            lantern_instances: instances(&lanterns),
             form_count: (forms.len() / FORM_FLOATS) as u32,
             drawn: texture(device, size, FORMAT, SAMPLES).create_view(&Default::default()),
             depth: texture(device, size, DEPTH, SAMPLES).create_view(&Default::default()),
@@ -392,7 +392,8 @@ impl Renderer {
         }
         uniforms.extend(colours);
         for impulse in shown {
-            let side = impulse.side as i32 as f64 - 1.0;
+            // The side lit: -1 the left, 1 the right, and 0, which is both.
+            let side: f64 = impulse.side.signs().iter().sum();
             uniforms.extend([side, 0.0, impulse.reach_m, impulse.level].map(|v| v as f32));
         }
         uniforms.resize(UNIFORM_FLOATS, 0.0);
@@ -446,8 +447,13 @@ impl Renderer {
 
         // A form is a box of six faces, a lantern one face that is turned to the camera.
         let instanced = [
-            (&self.forms, &self.boxes, 36, self.form_count),
-            (&self.lanterns, &self.instances, 6, self.lantern_count),
+            (&self.forms, &self.form_instances, 36, self.form_count),
+            (
+                &self.lanterns,
+                &self.lantern_instances,
+                6,
+                self.lantern_count,
+            ),
         ];
         for (pipeline, instances, corners, count) in instanced {
             if count > 0 {

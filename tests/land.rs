@@ -41,6 +41,23 @@ fn sound_in_the_left_channel_only_raises_the_land_on_the_left_and_not_on_the_rig
     }
 }
 
+/// The valid no-match outcome: nothing sounds, so nothing stands and no land passes.
+#[test]
+fn a_silent_file_gives_level_ground() {
+    let dir = scratch("land-silence");
+    let song = dir.join("silence.wav");
+    write_wav(&song, &silence(10.0), &silence(10.0));
+
+    for moment in moments(&song, &dir.join("out"), &["2", "5", "8"]) {
+        let (left, right) = profile(&moment);
+        assert!(
+            tallest(&left) == 0.0 && tallest(&right) == 0.0 && moment["past_land_per_s"] == 0.0,
+            "left {left:?}, right {right:?}, past the land {}",
+            moment["past_land_per_s"]
+        );
+    }
+}
+
 /// The tallest the land stands near the route and far out from it: over the nearest
 /// third of the profile and over the farthest.
 fn near_and_far(moment: &Value) -> (f64, f64) {

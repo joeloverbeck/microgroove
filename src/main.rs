@@ -161,8 +161,8 @@ fn parse(args: Vec<OsString>, options: &[&str]) -> Option<Request> {
                 .is_none(),
             "--dial" => {
                 let steps = text?.parse().ok();
-                let steps = steps.filter(|steps: &i32| steps.abs() <= place::DIAL_MOST);
-                request.dial.replace(steps?).is_none()
+                let within = |steps: &i32| (-place::DIAL_MOST..=place::DIAL_MOST).contains(steps);
+                request.dial.replace(steps.filter(within)?).is_none()
             }
             _ => request.size.replace(size(text?)?).is_none(),
         };
@@ -240,7 +240,7 @@ fn timeline(request: &Request) -> Result<(), String> {
 /// The least, the median, the 95th and 99th in a hundred, and the greatest of some values.
 fn spread(mut values: Vec<f64>) -> serde_json::Value {
     values.sort_by(f64::total_cmp);
-    let share = |of: usize| values.get(values.len().saturating_sub(1) * of / 100);
+    let share = |of: usize| analysis::percentile(&values, of);
     serde_json::json!({
         "least": share(0),
         "median": share(50),

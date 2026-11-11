@@ -235,18 +235,24 @@ fn intensity(momentary: &[f32], hop_s: f64) -> Vec<f32> {
         .copied()
         .filter(|lufs| *lufs > SILENT_LUFS)
         .collect();
-    if sounding.is_empty() {
-        return vec![0.0; momentary.len()];
-    }
     sounding.sort_by(f32::total_cmp);
-    let percentile = |p: usize| sounding[(sounding.len() - 1) * p / 100];
-    let loud = percentile(LOUD_PERCENTILE);
-    let quiet = percentile(QUIET_PERCENTILE).min(loud - LEAST_RANGE_LU);
+    let of = |share: usize| percentile(&sounding, share);
+    let (Some(loud), Some(quiet)) = (of(LOUD_PERCENTILE), of(QUIET_PERCENTILE)) else {
+        return vec![0.0; momentary.len()];
+    };
+    let quiet = quiet.min(loud - LEAST_RANGE_LU);
     let raw: Vec<f32> = momentary
         .iter()
         .map(|lufs| ((lufs - quiet) / (loud - quiet)).clamp(0.0, 1.0))
         .collect();
     smooth(&raw, (INTENSITY_SMOOTH_S / hop_s).round() as usize)
+}
+
+/// The value so many hundredths of the way up a sorted list; none in an empty one.
+pub(crate) fn percentile<T: Copy>(sorted: &[T], of: usize) -> Option<T> {
+    sorted
+        .get(sorted.len().saturating_sub(1) * of / 100)
+        .copied()
 }
 
 /// Whether a value is the largest within `reach` steps either side: of equals, the first.
@@ -275,8 +281,9 @@ pub(crate) fn smooth(values: &[f32], reach: usize) -> Vec<f32> {
 
 /// Seconds per value of the slow curves (levels, change, intensity).
 const SLOW_HOP_S: f64 = 0.1;
-/// Band amplitudes below this (-80 dBFS) all count as silence.
+/// Band amplitudes below this all count as silence, which is this level in decibels.
 const SILENCE: f32 = 1e-4;
+pub const SILENT_DB: f32 = -80.0;
 
 /// The level of each band in decibels, averaged over each slow step.
 fn band_levels(spectrum: &Spectrum, hop_s: f64, steps: usize) -> Vec<[f32; BANDS]> {

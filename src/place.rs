@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 
-use crate::analysis::{Analysis, BANDS, Onset, Part, Section, smooth};
+use crate::analysis::{Analysis, BANDS, Onset, Part, SILENT_DB, Section, percentile, smooth};
 
 /// Speed along the route at intensity 0 and at intensity 1, in metres per second of song.
 /// Between them each equal step of intensity multiplies it alike.
@@ -50,16 +50,21 @@ const FLOOR_M: (f64, f64) = (25.0, 80.0);
 /// song, from its 10th to its 99th percentile. That range counts as this many decibels at
 /// least and at most, and a band that stays this far under the song's loudest band is
 /// measured against that band instead, so that what is hardly there does not stand tall.
+/// No band is measured against less than the least range above silence, so that in a
+/// silent file nothing stands.
 const BAND_RANGE_DB: (f32, f32) = (6.0, 36.0);
 const BAND_UNDER_DB: f32 = 24.0;
 /// Along the route a band is smoothed over this many times its own width across the
 /// land, and over this many rows at least, so that what it does is about as long as it
 /// is wide: a hill, not a rib across the land or a strip along it. What it does over
 /// this many times that length is its standing, which counts for this much of its
-/// height; what it does apart from its standing counts this many times over.
+/// height; what it does apart from its standing counts this many times over. However
+/// sharply it does a thing, it stands no stronger than the last of these: a little over
+/// the strongest any band stands in the first-journey song, which is 2.03.
 const ALONG: (f64, usize) = (1.5, 4);
 const STANDING: (usize, f32) = (6, 0.7);
 const OWN: f32 = 3.0;
+const STRONGEST: f32 = 2.1;
 /// What a channel has that the other has not counts this many times over, so that the
 /// two sides of a song mixed nearly alike are not mirror images.
 const APART: f32 = 3.0;
@@ -162,8 +167,8 @@ pub struct Place {
     distance: Vec<f64>,
     across: Vec<f64>,
     regions: Vec<Region>,
-    /// How strongly each band stands on each row of ground, from 0 to 1: the left
-    /// channel's bands and the right's, low to high.
+    /// How strongly each band stands on each row of ground, from 0 to `STRONGEST`: the
+    /// left channel's bands and the right's, low to high.
     land: Vec<[[f32; BANDS]; 2]>,
     impulses: Vec<Impulse>,
     pub sky: Sky,
@@ -228,6 +233,17 @@ pub enum Side {
     Right,
 }
 
+impl Side {
+    /// Each side of the route this stands on: -1 the left, 1 the right.
+    pub fn signs(self) -> &'static [f64] {
+        match self {
+            Side::Left => &[-1.0],
+            Side::Centre => &[-1.0, 1.0],
+            Side::Right => &[1.0],
+        }
+    }
+}
+
 /// What the fingerprint gives the whole place: its palette and its weather.
 pub struct Sky {
     pub zenith: [f32; 3],
@@ -268,7 +284,7 @@ pub struct Moment {
     pub over_ground_per_s: f64,
     pub past_land_per_s: f64,
     /// How many times nearer the ground the dial has brought the camera, and with it
-    /// the lanterns and rings, which are sized to its height: 1 with the dial at rest.
+    /// the lanterns, which are sized to its height: 1 with the dial at rest.
     pub nearer: f64,
     /// The accent colour of the land around the listener, which tints the air, and how
     /// thick the air is there, of the place's own: each kind of place has its air.
@@ -488,9 +504,7 @@ impl Place {
 
         let mut strengths: Vec<f32> = analysis.onsets.iter().map(|onset| onset.strength).collect();
         strengths.sort_by(f32::total_cmp);
-        let full = strengths
-            .get(strengths.len().saturating_sub(1) * FULL_LEVEL_PERCENTILE / 100)
-            .map_or(1.0, |strength| f64::from(*strength));
+        let full = percentile(&strengths, FULL_LEVEL_PERCENTILE).map_or(1.0, f64::from);
         let impulse = |onset: &Onset| {
             let mut impulse = Impulse {
                 onset_s: onset.time_s,
@@ -621,12 +635,7 @@ impl Place {
             return Vec::new();
         };
         let (out, across, along, tall) = FORMS[part as usize];
-        let sides: &[f64] = match side {
-            Side::Left => &[-1.0],
-            Side::Centre => &[-1.0, 1.0],
-            Side::Right => &[1.0],
-        };
-        let floor = impulse.floor_m;
+        let (sides, floor) = (side.signs(), impulse.floor_m);
         let height = mix(tall.0, tall.1, impulse.level) * floor + SUNK_M;
         let stand = |(toward, ahead): (&f64, &f64)| {
             let z = impulse.origin_m[1] + ahead;
@@ -771,8 +780,7 @@ impl Place {
         let range = |band: usize| {
             let mut levels: Vec<f32> = sides.iter().flatten().map(|step| step[band]).collect();
             levels.sort_by(f32::total_cmp);
-            let share = |of: usize| levels.get(levels.len().saturating_sub(1) * of / 100);
-            [10, 99].map(|of| share(of).map_or(0.0, |level| *level))
+            [10, 99].map(|of| percentile(&levels, of).unwrap_or(0.0))
         };
         let ranges: [[f32; 2]; BANDS] = std::array::from_fn(range);
         let loudest = ranges.iter().map(|range| range[1]).fold(f32::MIN, f32::max);
@@ -784,35 +792,33 @@ impl Place {
         let mut land = vec![[[0.0; BANDS]; 2]; rows];
         for (side, levels) in sides.iter().enumerate() {
             for band in 0..BANDS {
-                let high = ranges[band][1].max(loudest - BAND_UNDER_DB);
+                let high =
+                    (ranges[band][1].max(loudest - BAND_UNDER_DB)).max(SILENT_DB + BAND_RANGE_DB.0);
                 let low = ranges[band][0].clamp(high - BAND_RANGE_DB.1, high - BAND_RANGE_DB.0);
-                // How the band stands as a running total over the song, so that a row of
-                // ground takes the mean over the time it covers.
+                // Where the band's level lies in its range, as a running total over the
+                // song, so that a row of ground takes the mean over the time it covers.
                 let mut total = vec![0.0f64];
-                let stands = |level: f32| ((level - low) / (high - low)).clamp(0.0, 1.0);
+                let lies = |level: f32| ((level - low) / (high - low)).clamp(0.0, 1.0);
                 for (step, other) in levels.iter().zip(&sides[1 - side]) {
-                    let (here, there) = (stands(step[band]), stands(other[band]));
+                    let (here, there) = (lies(step[band]), lies(other[band]));
                     let here = (here + (APART - 1.0) / 2.0 * (here - there)).clamp(0.0, 1.0);
                     total.push(total[total.len() - 1] + f64::from(here));
                 }
                 let until = |time_s: f64| {
                     let x = time_s / self.hop_s;
                     let step = (x.max(0.0) as usize).min(total.len().saturating_sub(2));
-                    let stands = total.get(step + 1).map_or(0.0, |next| next - total[step]);
-                    total[step] + stands * (x - step as f64)
+                    let gained = total.get(step + 1).map_or(0.0, |next| next - total[step]);
+                    total[step] + gained * (x - step as f64)
                 };
                 let mean = |row: &[f64]| (until(row[1]) - until(row[0])) / (row[1] - row[0]);
-                let stands: Vec<f32> = edges
-                    .windows(2)
-                    .map(|row| (mean(row) * self.hop_s) as f32)
-                    .collect();
+                let means = edges.windows(2).map(|row| (mean(row) * self.hop_s) as f32);
                 let width = band_m(band as f64 + 0.5) - band_m(band as f64 - 0.5);
                 let reach = ((ALONG.0 * width / ROW_M).round() as usize).max(ALONG.1);
-                let stands = smooth(&stands, reach);
-                let standing = smooth(&stands, STANDING.0 * reach);
-                for (row, (stands, standing)) in stands.iter().zip(&standing).enumerate() {
+                let does = smooth(&means.collect::<Vec<f32>>(), reach);
+                let standing = smooth(&does, STANDING.0 * reach);
+                for (row, (does, standing)) in does.iter().zip(&standing).enumerate() {
                     land[row][side][band] =
-                        (STANDING.1 * standing + OWN * (stands - standing)).max(0.0);
+                        (STANDING.1 * standing + OWN * (does - standing)).clamp(0.0, STRONGEST);
                 }
             }
         }

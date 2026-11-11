@@ -139,8 +139,7 @@ pub fn onsets_and_pulse(spectrum: &Spectrum, sides: &[Spectrum; 2]) -> (Vec<Onse
     let strong: [f32; 6] = std::array::from_fn(|measure| {
         let mut values: Vec<f32> = jumped.iter().map(|jump| jump[measure]).collect();
         values.sort_by(f32::total_cmp);
-        let strong = values.get(values.len().saturating_sub(1) * STRONG_PERCENTILE / 100);
-        strong.copied().unwrap_or(0.0)
+        super::percentile(&values, STRONG_PERCENTILE).unwrap_or(0.0)
     });
     // An onset's score in a part of the sound sets its rise and its gain there against
     // those of the song's strong onsets; its part is the one where it scores highest.

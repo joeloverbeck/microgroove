@@ -55,16 +55,25 @@ fn one_command_writes_a_still_and_the_numbers_of_its_moment_with_no_display() {
     assert!(moment["impulses"].is_array(), "{moment}");
 }
 
-/// `1:-50` is not ten seconds: the command is not understood, and no file is looked for.
+/// `1:-50` is not ten seconds, and the dial goes eight steps either way and no further,
+/// however far out the number: the command is not understood, and no file is looked for.
 #[test]
-fn a_song_time_with_seconds_below_zero_is_not_a_song_time() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_microgroove"))
-        .args(["still", "no-such-song.wav", "--at", "1:-50"])
-        .output()
-        .unwrap();
-    let message = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(2), "{message}");
-    assert!(message.starts_with("usage:"), "{message}");
+fn a_song_time_below_zero_and_a_dial_out_of_range_are_not_understood() {
+    let out_of_range: [&[&str]; 3] = [
+        &["--at", "1:-50"],
+        &["--at", "1", "--dial", "9"],
+        &["--at", "1", "--dial", "-2147483648"],
+    ];
+    for options in out_of_range {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_microgroove"))
+            .args(["still", "no-such-song.wav"])
+            .args(options)
+            .output()
+            .unwrap();
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{options:?}: {message}");
+        assert!(message.starts_with("usage:"), "{message}");
+    }
 }
 
 #[test]
