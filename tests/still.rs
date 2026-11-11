@@ -111,10 +111,13 @@ fn the_dial_makes_the_ground_pass_faster_or_slower_and_leaves_the_place_as_it_is
     let (slower, tuned, faster) = (at("-1"), at("0"), at("2"));
     let height = |moment: &Value| num(&moment["camera"]["position_m"][1]);
     let passing = |moment: &Value| num(&moment["over_ground_per_s"]);
+    // The ring of the click at 11.75 s is sized to the camera's height.
+    let reach = |moment: &Value| num(&moment["impulses"][0]["reach_m"]);
     assert!(
         (height(&tuned) / height(&faster) - 1.21).abs() < 1e-9
-            && (height(&slower) / height(&tuned) - 1.1).abs() < 1e-9,
-        "camera heights: {slower}, {tuned}, {faster}"
+            && (height(&slower) / height(&tuned) - 1.1).abs() < 1e-9
+            && (reach(&tuned) / reach(&faster) - 1.21).abs() < 1e-9,
+        "camera heights and rings: {slower}, {tuned}, {faster}"
     );
     assert!(passing(&slower) < passing(&tuned) && passing(&tuned) < passing(&faster));
     for dialled in [&slower, &faster] {
