@@ -37,10 +37,17 @@ fn clock(seconds: f64) -> String {
     format!("{}:{:04.1}", (seconds / 60.0) as u32, seconds % 60.0)
 }
 
-/// The nine section starts the owner's annotation requires, in seconds.
-const REQUIRED_STARTS: [f64; 9] = [28.0, 57.0, 72.0, 94.0, 152.0, 167.0, 188.0, 197.0, 227.0];
+/// The seven section starts the owner's annotation requires, in seconds. Issue #1 listed
+/// nine. On 2026-11-11 the owner listened again and reported that two of them, 0:57 and
+/// 3:08, mark the lyrics more than the music, as 3:36 does, so no boundary is required
+/// there (recorded in the comments on issue #1).
+const REQUIRED_STARTS: [f64; 7] = [28.0, 72.0, 94.0, 152.0, 167.0, 197.0, 227.0];
 /// The five measured, unconfirmed changes: a boundary near one of them is allowed.
 const MEASURED_CHANGES: [f64; 5] = [124.0, 136.0, 210.0, 231.0, 243.0];
+/// Two changes the owner hears inside a verse (same listening): a lower passage from about
+/// 1:00, and the guitar going from single strums to continuous ones at 3:08. A boundary
+/// near one of them is allowed. Whether either must be a boundary is the owner's to say.
+const HEARD_INSIDE_A_VERSE: [f64; 2] = [60.0, 188.0];
 const WITHIN_S: f64 = 2.0;
 
 #[test]
@@ -59,7 +66,9 @@ fn sections_every_required_start_has_a_boundary_and_few_boundaries_are_unexplain
     let unexplained: Vec<String> = boundaries
         .iter()
         .filter(|boundary| {
-            !near(&REQUIRED_STARTS, **boundary) && !near(&MEASURED_CHANGES, **boundary)
+            !near(&REQUIRED_STARTS, **boundary)
+                && !near(&MEASURED_CHANGES, **boundary)
+                && !near(&HEARD_INSIDE_A_VERSE, **boundary)
         })
         .map(|boundary| clock(*boundary))
         .collect();
@@ -152,6 +161,41 @@ fn intensity_is_lowest_and_highest_where_the_song_is_and_falls_across_the_bridge
     assert!(
         thirds[0] > thirds[1] && thirds[1] > thirds[2],
         "intensity across the Bridge, by thirds: {thirds:?}"
+    );
+}
+
+/// The average intensity between two song times.
+fn mean_intensity(heard: &Value, from_s: f64, to_s: f64) -> f64 {
+    let hop_s = f(&heard["intensity"]["hop_s"]);
+    let values = heard["intensity"]["values"].as_array().unwrap();
+    let stretch = &values[(from_s / hop_s) as usize..(to_s / hop_s) as usize];
+    stretch.iter().map(f).sum::<f64>() / stretch.len() as f64
+}
+
+/// What the owner heard on listening again on 2026-11-11 (comments on issue #1): two
+/// changes that stay inside a verse, which intensity must still follow.
+#[test]
+fn intensity_follows_what_the_owner_hears_inside_the_verses() {
+    let Some(heard) = first_journey("intensity inside the verses") else {
+        return;
+    };
+    // A lower passage from about 1:00 to the start of Verse 3, inside Verse 2.
+    let verse_2 = mean_intensity(heard, 30.0, 54.0);
+    let lower_passage = mean_intensity(heard, 61.0, 71.0);
+    assert!(
+        lower_passage < verse_2,
+        "the lower passage reads {lower_passage} against {verse_2} in Verse 2 before it"
+    );
+
+    // A build-up across 2:58-3:12: each third higher than the one before.
+    let thirds = [
+        mean_intensity(heard, 178.0, 182.67),
+        mean_intensity(heard, 182.67, 187.33),
+        mean_intensity(heard, 187.33, 192.0),
+    ];
+    assert!(
+        thirds[0] < thirds[1] && thirds[1] < thirds[2],
+        "intensity across 2:58-3:12, by thirds: {thirds:?}"
     );
 }
 
