@@ -1,0 +1,133 @@
+//! Shared helpers: every test drives the built program through its command line.
+#![allow(dead_code)]
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+pub use serde_json::Value;
+
+/// A fresh, empty, git-ignored directory for one test.
+pub fn scratch(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+pub fn run_timeline(song: &Path, out: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_microgroove"))
+        .arg("timeline")
+        .arg(song)
+        .arg("--out")
+        .arg(out)
+        .output()
+        .unwrap()
+}
+
+/// Runs `timeline` and returns the analysis numbers as raw bytes.
+pub fn numbers_bytes(song: &Path, out: &Path) -> Vec<u8> {
+    let output = run_timeline(song, out);
+    assert!(
+        output.status.success(),
+        "timeline failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read(out.join("analysis.json")).unwrap()
+}
+
+pub fn numbers(song: &Path, out: &Path) -> Value {
+    serde_json::from_slice(&numbers_bytes(song, out)).unwrap()
+}
+
+/// Says plainly that a check did not run. Written straight to stderr so the
+/// test harness does not swallow it: a skipped check must never look passed.
+pub fn skip(check: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "SKIPPED {check}: {reason}");
+}
+
+pub const RATE: u32 = 48_000;
+
+/// Writes interleaved stereo samples in [-1, 1] as a 16-bit PCM WAV file.
+pub fn write_wav(path: &Path, left: &[f32], right: &[f32]) {
+    assert_eq!(left.len(), right.len());
+    let data_len = (left.len() * 4) as u32;
+    let mut bytes = Vec::with_capacity(44 + data_len as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    bytes.extend_from_slice(&2u16.to_le_bytes()); // channels
+    bytes.extend_from_slice(&RATE.to_le_bytes());
+    bytes.extend_from_slice(&(RATE * 4).to_le_bytes());
+    bytes.extend_from_slice(&4u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    for (l, r) in left.iter().zip(right) {
+        for s in [l, r] {
+            let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+pub fn silence(seconds: f64) -> Vec<f32> {
+    vec![0.0; (seconds * RATE as f64).round() as usize]
+}
+
+pub fn tone(seconds: f64, hz: f64, amplitude: f32) -> Vec<f32> {
+    (0..(seconds * RATE as f64).round() as usize)
+        .map(|n| amplitude * (std::f64::consts::TAU * hz * n as f64 / RATE as f64).sin() as f32)
+        .collect()
+}
+
+/// Deterministic white noise from a fixed linear congruential generator.
+pub fn noise(seconds: f64, amplitude: f32) -> Vec<f32> {
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    (0..(seconds * RATE as f64).round() as usize)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            amplitude * (((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0)
+        })
+        .collect()
+}
+
+/// Adds a short click (a 4 ms burst of decaying noise) starting at each given time.
+pub fn add_clicks(signal: &mut [f32], times: &[f64], amplitude: f32) {
+    let burst = noise(0.004, 1.0);
+    for &t in times {
+        let start = (t * RATE as f64).round() as usize;
+        for (i, b) in burst.iter().enumerate() {
+            if let Some(s) = signal.get_mut(start + i) {
+                *s += amplitude * b * (1.0 - i as f32 / burst.len() as f32);
+            }
+        }
+    }
+}
+
+/// Times `first`, `first + period`, ... strictly before `end`.
+pub fn every(first: f64, period: f64, end: f64) -> Vec<f64> {
+    (0..)
+        .map(|k| first + k as f64 * period)
+        .take_while(|t| *t < end)
+        .collect()
+}
+
+pub fn f(value: &Value) -> f64 {
+    value
+        .as_f64()
+        .unwrap_or_else(|| panic!("expected a number, got {value}"))
+}
+
+pub fn times(list: &Value) -> Vec<f64> {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .map(|item| f(&item["time_s"]))
+        .collect()
+}
