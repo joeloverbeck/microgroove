@@ -135,7 +135,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let face = normalize(cross(dpdx(in.point), dpdy(in.point)));
     let shape = normalize(mix(normalize(in.normal), face * sign(face.y), ice));
     // Level ground is smooth, and shines by what it is made of: still water is a mirror,
-    // sheet ice shines less, a slab of rock hardly, and sand not at all.
+    // sheet ice shines less, and rock and sand not at all.
     let flat = smoothstep(0.86, 0.995, shape.y);
     let wet = flat * dot(in.kind, SHINES);
     // Slopes are grained, at a scale finer than the ground's triangles: rock coarsely,

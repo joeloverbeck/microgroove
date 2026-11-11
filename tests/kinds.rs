@@ -32,6 +32,26 @@ fn a_quiet_thin_sound_then_a_loud_dense_one_then_the_first_again_is_three_region
     assert_eq!(moments[0]["place"]["kinds"], serde_json::json!(kinds));
 }
 
+/// The song dying away is not a place of its own; an ending long enough to be one is.
+#[test]
+fn a_tail_of_a_few_seconds_takes_the_kind_of_the_region_before_it() {
+    let dir = scratch("kinds-tail");
+    let kinds_with_an_ending_of = |seconds: f64| {
+        let song = dir.join(format!("ending-{seconds}.wav"));
+        let signal = [common::noise(12.0, 0.3), tone(seconds, 440.0, 0.02)].concat();
+        write_wav(&song, &signal, &signal);
+        let out = dir.join(format!("out-{seconds}"));
+        moments(&song, &out, &["6"])[0]["place"]["kinds"].clone()
+    };
+    let (tail, ending) = (kinds_with_an_ending_of(2.5), kinds_with_an_ending_of(8.0));
+    let kinds = |kinds: &common::Value| kinds.as_array().expect("a kind for each region").clone();
+    let (tail, ending) = (kinds(&tail), kinds(&ending));
+    assert_eq!((tail.len(), ending.len()), (2, 2), "{tail:?}, {ending:?}");
+    assert_eq!(tail[0], tail[1], "2.5 s of another sound to end with");
+    assert_ne!(ending[0], ending[1], "8 s of another sound to end with");
+    assert_eq!(tail[0], ending[0], "the same sound before each ending");
+}
+
 /// The valid no-match outcome: one sound throughout is one kind of place throughout.
 #[test]
 fn a_steady_tone_is_one_region_of_one_kind() {
