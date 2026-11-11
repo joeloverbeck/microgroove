@@ -378,6 +378,12 @@ fn the_ground_passes_three_times_as_fast_in_the_loudest_passages_as_in_the_quiet
             );
         }
     }
+    // Nor does the land beside pass slower through the two quiet passages and the ice at
+    // 2:05-2:12 than it did at viewing 1, by the report on issue #6.
+    for (passage, at_viewing_1) in [((1, 28), 1.17), ((198, 210), 1.24), ((125, 132), 0.9)] {
+        let land = mean("past_land_per_s", passage);
+        assert!(land >= at_viewing_1, "{passage:?}: past the land {land}");
+    }
 }
 
 /// Issue #6, through each turn of the song: the lean peaks within 0.25 s of the view's

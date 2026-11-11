@@ -76,8 +76,18 @@ const CARVED: [(f64, f64, f64, f64, f64); 4] = [
     (1500.0, 0.55, 1.1, 0.3, 150.0),
     (1500.0, 0.75, 3.0, -0.8, 150.0),
 ];
-/// Still water floods the land this deep: only what stands taller shows, as islands.
+/// Still water floods the land this deep: only what stands taller shows, as islands. The
+/// flood shallows to nothing at the floor's edge, from this far out, so that beside the
+/// floor what the lowest bands raise stands in the shallows, as low bars.
 const FLOOD_M: f64 = 12.0;
+const SHOAL_M: f64 = 80.0;
+/// Beside the floor ice is blunt: strength counts by this power at the floor's edge, and
+/// by more with distance, up to the kind's own this far out. Shards stand by the sheet
+/// and spires far off.
+const SHARD: (f64, f64) = (1.5, 200.0);
+/// Land stands where it is this much taller than the floor: as far as the floor's own
+/// swell rises. Anything lower cannot be told from the floor as it passes.
+const STANDS_M: f64 = 3.0;
 /// Terraced rock stands in steps. Its first tread lies this high and each next one this
 /// many times higher, the same everywhere in the place; the last share of each step is
 /// its riser.
@@ -253,7 +263,8 @@ pub struct Moment {
     /// Speed along the route, in metres per second of song.
     pub speed_m_s: f64,
     /// How fast what is near passes the camera, in times a second: speed over its height
-    /// above the ground under it, and over the distance to where the land beside begins.
+    /// above the ground under it, and over the distance from the middle of the route to
+    /// the nearest land that stands beside it, which is 0 where none stands.
     pub over_ground_per_s: f64,
     pub past_land_per_s: f64,
     /// How many times nearer the ground the dial has brought the camera, and with it
@@ -671,7 +682,7 @@ impl Place {
             light,
             speed_m_s: speed,
             over_ground_per_s: speed / (eye[1] - f64::from(self.level(eye[0], along))),
-            past_land_per_s: speed / scale(FLOOR_M, light),
+            past_land_per_s: speed / self.nearest_land_m(along),
             nearer,
             accent,
             air: kinds.iter().zip(AIR).map(|(kind, air)| kind * air).sum(),
@@ -832,13 +843,17 @@ impl Place {
             } else {
                 grain
             };
+            let crest = match kind {
+                Kind::Ice => mix(SHARD.0, crest, ease(beyond_m / SHARD.1)),
+                _ => crest,
+            };
             // The land climbs out of the floor over the reach of the lowest band.
             let height = relief
                 * (beyond_m / HALF_WIDTH_M).powf(sweep)
                 * ease(beyond_m / band_m(0.0))
                 * (strength * (1.0 + grained * grain)).powf(crest);
             let height = match kind {
-                Kind::Water => (height - FLOOD_M).max(0.0),
+                Kind::Water => (height - FLOOD_M * ease(beyond_m / SHOAL_M)).max(0.0),
                 Kind::Rock => terraced(height),
                 _ => height,
             };
@@ -846,6 +861,28 @@ impl Place {
         };
         let here = |kind: &&Kind| kinds[**kind as usize] > 0.0;
         KINDS.iter().filter(here).map(carved).sum()
+    }
+
+    /// How far from the middle of the route the nearest land stands, on either side, on the
+    /// row of ground at a distance along the route: the nearest column of that row on
+    /// which the land as it is drawn, grain and all, is `STANDS_M` tall. Infinite where
+    /// none stands.
+    fn nearest_land_m(&self, route_m: f64) -> f64 {
+        let row = row_at(route_m + ROW_M / 2.0).min(self.land.len() - 1);
+        let along = row as f64 * ROW_M - BEHIND_M;
+        let time_s = self.time_at(along);
+        let floor = scale(FLOOR_M, read(&self.intensity, self.hop_s, time_s));
+        let (centre, kinds) = (self.across(time_s), self.character(along).1);
+        let stands = |across: &f64| {
+            [-1.0, 1.0].iter().any(|toward| {
+                let grain = grain(kinds, centre + toward * across, along);
+                let side = usize::from(*toward > 0.0);
+                self.stands(row, side, across - floor, kinds, grain) >= STANDS_M
+            })
+        };
+        let share = |column: usize| column as f64 / (COLUMNS - 1) as f64 * 2.0;
+        let mut columns = (1..=COLUMNS / 2).map(|column| crowd(share(column)));
+        columns.find(stands).unwrap_or(f64::INFINITY)
     }
 
     /// The land across the route at a distance along it, where the song's intensity is as given.
@@ -885,12 +922,8 @@ impl Place {
                 let across = crowd(column as f64 / (COLUMNS - 1) as f64 * 2.0 - 1.0);
                 let x = centre + across;
                 let beyond = (across.abs() - floor).max(0.0);
-                let grain = std::array::from_fn(|kind| {
-                    let size = CARVED[kind].4;
-                    let noise = || fractal((x / size) as f32, (along / size) as f32) - 0.5;
-                    f64::from(if kinds[kind] > 0.0 { noise() } else { 0.0 })
-                });
                 let side = usize::from(across > 0.0);
+                let grain = grain(kinds, x, along);
                 let height = self.stands(row, side, beyond, kinds, grain) as f32
                     + dry * swell(x as f32, along as f32);
                 positions.push([x as f32, height, along as f32]);
@@ -932,6 +965,16 @@ impl Place {
             vertices,
         }
     }
+}
+
+/// Each kind's fixed noise at a point of the place, from -0.5 to 0.5: none for a kind of
+/// place the ground there is not.
+fn grain(kinds: [f32; 4], x: f64, along: f64) -> [f64; 4] {
+    std::array::from_fn(|kind| {
+        let size = CARVED[kind].4;
+        let noise = || fractal((x / size) as f32, (along / size) as f32) - 0.5;
+        f64::from(if kinds[kind] > 0.0 { noise() } else { 0.0 })
+    })
 }
 
 /// How much further along a route of the given slope a box (see `Place::stood`) would

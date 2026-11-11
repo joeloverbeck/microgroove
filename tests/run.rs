@@ -58,15 +58,19 @@ fn a_run_reports_how_fast_the_ground_and_the_land_beside_pass_and_the_song_drive
         loud >= 3.0 * quiet,
         "the ground passes {quiet} times a second in the quiet, {loud} in the loud"
     );
+    // The quiet noise is at the bottom of its own range, so no land stands beside it and
+    // none passes; the loud noise raises land.
     let (quiet, loud) = (mean("past_land_per_s", 1), mean("past_land_per_s", 9));
     assert!(
-        loud >= quiet,
+        quiet == 0.0 && loud > 0.0,
         "the land beside passes {quiet} times a second in the quiet, {loud} in the loud"
     );
-    for rate in ["over_ground_per_s", "past_land_per_s"] {
-        let summed = &run["passing"][rate];
-        assert!(num(&summed["least"]) > 0.0, "{rate}: {summed}");
-    }
+    let summed = &run["passing"];
+    assert!(
+        num(&summed["over_ground_per_s"]["least"]) > 0.0
+            && num(&summed["past_land_per_s"]["max"]) > loud,
+        "{summed}"
+    );
 }
 
 /// One boundary, where the loudness jumps: quiet noise, then loud noise from 10 s on.

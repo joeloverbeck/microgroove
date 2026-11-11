@@ -80,6 +80,20 @@ fn a_low_tone_then_a_high_tone_gives_land_taller_near_the_route_then_taller_far_
         high.0,
         low.1
     );
+    // The land beside passes at the listener's speed over the distance to the nearest of
+    // it that stands. Under the low tone, which is quiet enough to be still water, that
+    // is nearer than the lowest band's own place: the water is shallow beside the floor.
+    // Under the high tone it is out in the farthest third of the profile.
+    assert_eq!(moments[0]["kind"], "water");
+    let nearest: Vec<f64> = moments
+        .iter()
+        .map(|moment| num(&moment["speed_m_s"]) / num(&moment["past_land_per_s"]))
+        .collect();
+    let across = |moment: usize, band: usize| num(&moments[moment]["land"]["across_m"][band]);
+    assert!(
+        nearest[0] < across(0, 0) && nearest[1] > across(1, 15),
+        "the nearest land stands {nearest:?} m from the middle of the route"
+    );
 }
 
 /// The valid no-match outcome, and a held sound as a ridge that runs beside the listener.
