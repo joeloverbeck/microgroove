@@ -188,6 +188,8 @@ pub enum Kind {
     Ice,
 }
 
+const KINDS: [Kind; 4] = [Kind::Water, Kind::Dunes, Kind::Rock, Kind::Ice];
+
 impl Kind {
     fn of(section: &Section) -> Kind {
         let dark = section.brightness < DARK_BELOW;
@@ -616,15 +618,8 @@ impl Place {
     pub fn lanterns(&self) -> Vec<f32> {
         let lantern = |i: &Impulse| {
             let [x, z] = i.origin_m;
-            let radius = i.altitude_m * (0.02 + 0.06 * i.level);
-            let lantern = [x as f32, self.level(x, z), z as f32];
-            [
-                lantern[0],
-                lantern[1],
-                lantern[2],
-                i.level as f32,
-                radius as f32,
-            ]
+            let radius = (i.altitude_m * (0.02 + 0.06 * i.level)) as f32;
+            [x as f32, self.level(x, z), z as f32, i.level as f32, radius]
         };
         let lesser = self.impulses.iter().filter(|i| i.form.is_none());
         lesser.flat_map(lantern).collect()
@@ -764,26 +759,28 @@ impl Place {
             return 0.0;
         }
         let strength = through(&self.land[row][side], 1.0, band_at(beyond_m) + 0.5).max(0.0);
-        let carved = |kind: usize| {
-            let (relief, sweep, crest, grained, _) = CARVED[kind];
+        let carved = |kind: &Kind| {
+            let (relief, sweep, crest, grained, _) = CARVED[*kind as usize];
+            let grain = grain[*kind as usize];
             let grain = if grained < 0.0 {
-                2.0 * grain[kind].abs()
+                2.0 * grain.abs()
             } else {
-                grain[kind]
+                grain
             };
             // The land climbs out of the floor over the reach of the lowest band.
             let height = relief
                 * (beyond_m / HALF_WIDTH_M).powf(sweep)
                 * ease(beyond_m / band_m(0.0))
                 * (strength * (1.0 + grained * grain)).powf(crest);
-            match kind {
-                0 => (height - FLOOD_M).max(0.0),
-                2 => terraced(height),
+            let height = match kind {
+                Kind::Water => (height - FLOOD_M).max(0.0),
+                Kind::Rock => terraced(height),
                 _ => height,
-            }
+            };
+            f64::from(kinds[*kind as usize]) * height
         };
-        let of = |kind: usize| f64::from(kinds[kind]) * carved(kind);
-        (0..4).filter(|kind| kinds[*kind] > 0.0).map(of).sum()
+        let here = |kind: &&Kind| kinds[**kind as usize] > 0.0;
+        KINDS.iter().filter(here).map(carved).sum()
     }
 
     /// The land across the route at a distance along it, where the song's intensity is as given.
@@ -895,14 +892,12 @@ fn band_at(beyond_m: f64) -> f64 {
 /// A height as terraced rock has it: level on the tread at or below it, and climbing to
 /// the next tread over the last share of the step between them.
 fn terraced(height: f64) -> f64 {
-    let step = (height / TREAD_M.0).ln() / TREAD_M.1.ln();
+    let (first, times) = TREAD_M;
+    let step = (height / first).ln() / times.ln();
     if step <= 0.0 {
         return height;
     }
-    TREAD_M.0
-        * TREAD_M
-            .1
-            .powf(step.floor() + ease((step.fract() - 1.0 + RISER) / RISER))
+    first * times.powf(step.floor() + ease((step.fract() - 1.0 + RISER) / RISER))
 }
 
 /// The gentle rise and fall of the ground everywhere, the floor of the route included.

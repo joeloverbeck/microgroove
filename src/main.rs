@@ -108,6 +108,8 @@ struct Series {
     impulses: Vec<usize>,
     /// Mean relative luminance of the whole picture.
     luminance: Vec<f32>,
+    /// How long the moment took to draw.
+    draw_ms: Vec<f64>,
 }
 
 fn main() -> ExitCode {
@@ -361,11 +363,11 @@ fn run(request: &Request) -> Result<(), String> {
 
     let mut series = Series::default();
     let mut tiles = vec![Vec::new(); comfort::TILES.0 * comfort::TILES.1];
-    let mut draw_ms = Vec::with_capacity(count);
     for index in 0..count {
         let at = from_s + index as f64 / rate as f64;
         let moment = place.moment(at, request.dial.unwrap_or(0));
-        draw_ms.push(gpu.draw(&renderer, &picture.view, &moment)?.as_secs_f64() * 1000.0);
+        let drawn = gpu.draw(&renderer, &picture.view, &moment)?;
+        series.draw_ms.push(drawn.as_secs_f64() * 1000.0);
         let luminance = picture.read(&gpu, |rows, stride| {
             comfort::luminance(rows, stride, picture.size)
         })?;
@@ -418,7 +420,7 @@ fn run(request: &Request) -> Result<(), String> {
             "over_ground_per_s": spread(series.over_ground_per_s.clone()),
             "past_land_per_s": spread(series.past_land_per_s.clone()),
         },
-        "draw_ms": spread(draw_ms),
+        "draw_ms": spread(series.draw_ms.clone()),
         "series": series,
         "tiles": tiles,
     });

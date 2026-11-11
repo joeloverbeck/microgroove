@@ -29,8 +29,8 @@ const LIT_M: f32 = 1200.0;
 // Tuning, for still water, dunes, terraced rock and ice in turn: how far level ground
 // shines, and how coarse the grain of a slope is. Then the width and the length of a
 // streak of sand and the thickness of a band of rock, in metres.
-const SHINES = vec4<f32>(1.0, 0.0, 0.15, 0.6);
-const COARSE = vec4<f32>(0.6, 0.15, 1.6, 0.3);
+const SHINES = vec4<f32>(1.0, 0.0, 0.0, 0.6);
+const COARSE = vec4<f32>(0.6, 0.15, 0.8, 0.3);
 const STREAK_M = vec2<f32>(2.0, 90.0);
 const STRATUM_M: f32 = 7.0;
 // An impulse's light counts each metre it climbs a wall of rock as this many it runs out.
@@ -140,27 +140,39 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let wet = flat * dot(in.kind, SHINES);
     // Slopes are grained, at a scale finer than the ground's triangles: rock coarsely,
     // sand and ice hardly. Height shifts the grain, so that it does not smear down a
-    // steep slope. Roughness too fine to draw fades out.
-    let rough = (across + in.point.y * vec2<f32>(1.3, 0.7)) / 7.0;
-    let grain = noise(rough);
-    let tilt = vec2<f32>(noise(rough + vec2<f32>(0.3, 0.0)), noise(rough + vec2<f32>(0.0, 0.3))) - grain;
+    // steep slope. Roughness too fine to draw fades out. Here and below, what a kind
+    // of ground does not show is not worked out for it.
     let coarse = dot(in.kind, COARSE) * clamp(1.0 - range / 1500.0, 0.0, 1.0) * (1.0 - flat);
+    var grain = 0.5;
+    var tilt = vec2<f32>(0.0);
+    if coarse > 0.0 {
+        let rough = (across + in.point.y * vec2<f32>(1.3, 0.7)) / 7.0;
+        grain = noise(rough);
+        tilt = (vec2<f32>(noise(rough + vec2<f32>(0.3, 0.0)), noise(rough + vec2<f32>(0.0, 0.3))) - grain) * 1.5 * coarse;
+    }
     // Sand that lies nearly level is combed in streaks that run with the route, so that
     // they stream past the listener and do not beat against the eye. No two are alike:
     // even stripes over much of the picture would be hard on the eye.
     let combed = across / STREAK_M;
-    let sand = noise(combed);
-    let comb = dunes * smoothstep(0.6, 0.9, shape.y) * clamp(1.0 - fwidth(combed.x), 0.0, 1.0);
-    let streak = comb * (noise(combed + vec2<f32>(0.4, 0.0)) - sand);
-    let normal = normalize(shape - vec3<f32>(tilt.x * 1.5 * coarse + 1.2 * streak, 0.0, tilt.y * 1.5 * coarse));
+    let comb = dunes * smoothstep(0.75, 0.95, shape.y) * clamp(1.0 - fwidth(combed.x), 0.0, 1.0);
+    var sand = 0.5;
+    if comb > 0.0 {
+        sand = noise(combed);
+        tilt.x += 1.2 * comb * (noise(combed + vec2<f32>(0.4, 0.0)) - sand);
+    }
+    let normal = normalize(shape - vec3<f32>(tilt.x, 0.0, tilt.y));
 
     // What each kind is made of: dark stone standing in the water, with a pale line
     // where the water meets it; pale sand; rock in bands that lie level through the
     // whole place; pale ice.
     let stone = mix(vec3<f32>(0.05), accent * 0.32, 0.7);
     let layer = in.point.y / STRATUM_M;
-    let band = smoothstep(0.35, 0.65, noise(vec2<f32>(layer + noise(across / 90.0), 3.7)));
-    let banded = mix(1.0, mix(0.4, 1.9, band), clamp(1.0 - 1.5 * fwidth(layer), 0.0, 1.0));
+    let banding = rock * (1.0 - flat) * clamp(1.0 - 1.5 * fwidth(layer), 0.0, 1.0);
+    var banded = 1.0;
+    if banding > 0.0 {
+        let band = smoothstep(0.35, 0.65, noise(vec2<f32>(layer, (across.x + across.y) / 120.0)));
+        banded = mix(1.0, mix(0.4, 1.9, band), banding / rock);
+    }
     let shore = (1.0 - flat) * (1.0 - smoothstep(0.3, 1.5, in.point.y));
     let matter = (water * mix(stone, vec3<f32>(0.5), shore)
             + dunes * mix(vec3<f32>(0.34), accent, 0.4) * (1.0 + 0.3 * comb * (sand - 0.5))
@@ -176,24 +188,36 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let mirrored = reflect(toward, normal);
     let glance = pow(1.0 - max(dot(-toward, normal), 0.0), 4.0);
     let shine = (0.05 + 0.3 * water + (0.95 - 0.3 * water) * glance) * wet + ice * (1.0 - wet) * (0.12 + 0.5 * glance);
-    colour = mix(colour, sky(normalize(vec3<f32>(mirrored.x, abs(mirrored.y) + 0.02, mirrored.z))), 0.7 * shine);
+    if shine > 0.0 {
+        colour = mix(colour, sky(normalize(vec3<f32>(mirrored.x, abs(mirrored.y) + 0.02, mirrored.z))), 0.7 * shine);
+        colour += ice * moment.sun.rgb * pow(max(dot(mirrored, moment.sun_toward.xyz), 0.0), 40.0);
+    }
     // All of that is as bright as the song gives light now.
     colour *= light();
 
     // The land glows from within where the song is intense, whatever the light is now:
     // rock along broken seams at even heights, and all but still water in veins that
-    // wander over whatever does not shine, which on a level slab of rock are a net of
-    // fine cracks. Seams and veins too fine to draw fade out.
+    // wander over whatever does not shine, which on a level slab of rock and on sheet
+    // ice are a net of fine cracks. Seams and veins too fine to draw fade out.
     let level = in.point.y / SEAM_M;
     let fine = fwidth(level);
-    let seam = (1.0 - smoothstep(0.02, 0.04 + fine, abs(fract(level) - 0.5)))
-        * clamp(1.0 - 2.5 * fine, 0.0, 1.0)
-        * smoothstep(0.42, 0.62, noise(across / 140.0 + vec2<f32>(floor(level) * 7.0)));
-    let cracks = mix(1.0, abs(2.0 * noise(across / 23.0) - 1.0), (rock + ice) * flat);
-    let wander = min(abs(2.0 * noise(across / 80.0) - 1.0), cracks);
-    let vein = (1.0 - smoothstep(0.0, 0.015 + 1.5 * fwidth(wander), wander))
-        * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - flat * (water + dunes));
-    colour += accent * in.paint.a * in.paint.a * GLOW * (0.04 + rock * seam + 0.5 * (1.0 - water) * vein);
+    var seam = 0.0;
+    if rock > 0.0 {
+        seam = rock * (1.0 - smoothstep(0.02, 0.04 + fine, abs(fract(level) - 0.5)))
+            * clamp(1.0 - 2.5 * fine, 0.0, 1.0)
+            * smoothstep(0.42, 0.62, noise(across / 140.0 + vec2<f32>(floor(level) * 7.0)));
+    }
+    let veined = (1.0 - water) * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - flat * (water + dunes));
+    let cracked = (rock + ice) * flat;
+    var wander = 1.0;
+    if veined > 0.0 {
+        wander = abs(2.0 * noise(across / 80.0) - 1.0);
+        if cracked > 0.0 {
+            wander = min(wander, mix(1.0, abs(2.0 * noise(across / 23.0) - 1.0), cracked));
+        }
+    }
+    let vein = veined * (1.0 - smoothstep(0.0, 0.015 + 1.5 * fwidth(wander), wander));
+    colour += accent * in.paint.a * in.paint.a * GLOW * (0.04 + seam + 0.5 * vein);
 
     // Each impulse in play lights the land beside the route, never level ground: a
     // front of light that runs up the land from the floor's edge, with a glow behind it.
