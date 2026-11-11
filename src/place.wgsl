@@ -1,4 +1,4 @@
-// Draws one moment of a place: the sky, then the ground, then the lanterns.
+// Draws one moment of a place: the sky, then the ground, then the forms and the lanterns.
 // Every input is the moment or the place; nothing is kept from one picture to the next.
 // Colours are linear light; the target's sRGB format encodes them.
 
@@ -7,23 +7,25 @@ struct Moment {
     origin: vec4<f32>,   // xyz: a point near the camera that every position is taken from. w: light, 0 to 1.
     eye: vec4<f32>,      // xyz: the camera, from the origin. w: haze per metre.
     right: vec4<f32>,    // xyz: camera right, scaled by half the width of the view. w: impulses in play.
-    up: vec4<f32>,       // xyz: camera up, scaled by half the height of the view. w: the size the dial leaves lanterns and rings, of their own.
+    up: vec4<f32>,       // xyz: camera up, scaled by half the height of the view. w: the size the dial leaves lanterns, of their own.
     forward: vec4<f32>,
     zenith: vec4<f32>,
     horizon: vec4<f32>,
     sun: vec4<f32>,
     sun_toward: vec4<f32>,
-    rings: array<vec4<f32>, 12>, // xy: the point under the camera, from the origin (across, along). z: reach. w: level.
+    lights: array<vec4<f32>, 12>, // x: the side lit, -1 the left, 1 the right, 0 both. z: reach. w: level.
 }
 
 @group(0) @binding(0) var<uniform> moment: Moment;
 
 // Tuning: the light the place keeps when the song gives none, the spacing of the seams
-// of light in the land, and how strongly the land glows and an impulse shows.
+// of light in the land, how strongly the land glows and an impulse shows, and how far
+// from the camera an impulse's light on the land is still at about a third.
 const LEAST_LIGHT: f32 = 0.14;
 const SEAM_M: f32 = 34.0;
 const GLOW: f32 = 0.55;
-const RING: f32 = 0.8;
+const LIT: f32 = 0.8;
+const LIT_M: f32 = 1200.0;
 
 fn light() -> f32 {
     return mix(LEAST_LIGHT, 1.0, moment.origin.w);
@@ -90,6 +92,7 @@ struct GroundOut {
     @location(0) point: vec3<f32>, // of the ground, from the origin
     @location(1) normal: vec3<f32>,
     @location(2) paint: vec4<f32>, // rgb: the region's accent. a: the intensity of the song here.
+    @location(3) beyond: f32,      // metres past the floor's edge: below zero on the left, zero on the floor.
 }
 
 @vertex
@@ -97,9 +100,10 @@ fn ground_vertex(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) paint: vec4<f32>,
+    @location(3) beyond: f32,
 ) -> GroundOut {
     let point = position - moment.origin.xyz;
-    return GroundOut(moment.view * vec4<f32>(point, 1.0), point, normal, paint);
+    return GroundOut(moment.view * vec4<f32>(point, 1.0), point, normal, paint, beyond);
 }
 
 @fragment
@@ -146,16 +150,68 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
         * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - wet);
     colour += accent * in.paint.a * in.paint.a * GLOW * (0.04 + seam + 0.5 * vein);
 
-    // Each impulse in play is a ring of light running out over the ground from under the camera.
+    // Each impulse in play lights the land beside the route, never its level floor: a
+    // front of light that runs up the land from the floor's edge, with a glow behind it.
     for (var i = 0; i < i32(moment.right.w); i++) {
-        let ring = moment.rings[i];
-        let off = (distance(in.point.xz, ring.xy) - ring.z) / (0.03 * ring.z + 0.5 * moment.up.w);
-        colour += mix(accent, vec3<f32>(1.0), 0.5) * ring.w * RING * exp(-off * off);
+        let lit = moment.lights[i];
+        let behind = (lit.z - abs(in.beyond)) / (10.0 + 0.4 * lit.z);
+        let front = smoothstep(-0.2, 0.0, behind) * exp(-2.5 * max(behind, 0.0));
+        let land = (1.0 - wet) * smoothstep(0.0, 4.0, abs(in.beyond)) * step(-0.5, in.beyond * lit.x);
+        colour += mix(accent, vec3<f32>(1.0), 0.5) * lit.w * LIT * front * land * exp(-range / LIT_M);
     }
+    return vec4<f32>(hazed(colour, toward, range), 1.0);
+}
 
-    // Distance fades the land into the sky that stands behind it.
+// Distance fades what stands in the place into the sky that stands behind it.
+fn hazed(colour: vec3<f32>, toward: vec3<f32>, range: f32) -> vec3<f32> {
     let behind = air(normalize(vec3<f32>(toward.x, max(toward.y, 0.0) + 0.03, toward.z))) * light();
-    return vec4<f32>(mix(behind, colour, exp(-range * moment.eye.w)), 1.0);
+    return mix(behind, colour, exp(-range * moment.eye.w));
+}
+
+// The corners of a face, as two triangles.
+const CORNERS = array<vec2<f32>, 6>(
+    vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+    vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
+);
+
+struct FormOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) point: vec3<f32>, // of the form, from the origin
+    @location(1) normal: vec3<f32>,
+    @location(2) up: f32,          // how far up the form: 0 at its foot, 1 at its top.
+}
+
+@vertex
+fn form_vertex(
+    @builtin(vertex_index) index: u32,
+    @location(0) foot: vec3<f32>, // the middle of its foot
+    @location(1) size: vec3<f32>, // half its width across the route, its height, half its depth along it
+) -> FormOut {
+    // A box: each of its six faces looks along one axis and spans the other two.
+    let corner = CORNERS[index % 6u];
+    let face = index / 6u;
+    var normal = vec3<f32>(0.0);
+    normal[face % 3u] = f32(face / 3u) * 2.0 - 1.0;
+    var unit = normal;
+    unit[(face + 1u) % 3u] = corner.x;
+    unit[(face + 2u) % 3u] = corner.y;
+    let base = foot - moment.origin.xyz;
+    // A form too thin to draw from where the camera is is drawn a pixel or two wide.
+    let half = max(size.xz, vec2<f32>(0.0006 * length(base - moment.eye.xyz)));
+    let point = base + vec3<f32>(unit.x * half.x, (unit.y + 1.0) * 0.5 * size.y, unit.z * half.y);
+    return FormOut(moment.view * vec4<f32>(point, 1.0), point, normal, 0.5 * unit.y + 0.5);
+}
+
+@fragment
+fn form_fragment(in: FormOut) -> @location(0) vec4<f32> {
+    let from_eye = in.point - moment.eye.xyz;
+    let range = length(from_eye);
+    // Dark matter under the sun and the sky, with a light of its own that is brightest at
+    // its top: dim enough that a form filling a part of the picture as it passes is no flash.
+    let sunlit = max(dot(in.normal, moment.sun_toward.xyz), 0.0);
+    let colour = vec3<f32>(0.03) * (moment.sun.rgb * sunlit * 2.2 + moment.zenith.rgb * 1.6 + moment.horizon.rgb * 0.25) * light()
+        + moment.sun.rgb * (0.04 + 0.2 * pow(in.up, 4.0));
+    return vec4<f32>(hazed(colour, from_eye / range, range), 1.0);
 }
 
 struct LanternOut {
@@ -171,11 +227,7 @@ fn lantern_vertex(
     @location(1) its_radius: f32,
 ) -> LanternOut {
     let radius = its_radius * moment.up.w;
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
-    );
-    let corner = corners[index];
+    let corner = CORNERS[index];
     let foot = lantern.xyz - moment.origin.xyz;
     let range = length(foot - moment.eye.xyz);
     // A lantern is never drawn smaller than a few pixels: it dims instead.

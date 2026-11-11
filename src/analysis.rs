@@ -10,9 +10,10 @@ use ebur128::{EbuR128, Mode};
 use serde::Serialize;
 
 use crate::decode::Song;
-pub use rhythm::{Onset, Pulse};
+pub use rhythm::{Onset, Part, Pulse};
 pub use sections::{Boundary, TRUST as BOUNDARY_TRUST};
-use spectrum::{BANDS, Spectrum};
+pub use spectrum::BANDS;
+use spectrum::Spectrum;
 
 #[derive(Serialize)]
 pub struct Analysis {
@@ -37,6 +38,9 @@ pub struct Analysis {
     /// curves. Drawn on the timeline; too bulky to be worth writing out as numbers.
     #[serde(skip)]
     pub band_levels: Vec<[f32; BANDS]>,
+    /// The same for the left channel alone and for the right alone.
+    #[serde(skip)]
+    pub side_levels: [Vec<[f32; BANDS]>; 2],
 }
 
 /// The measurements of the whole song that give its place an identity.
@@ -114,13 +118,15 @@ pub fn analyse(song: &Song) -> Analysis {
         .map(|(l, r)| (l + r) / 2.0)
         .collect();
     let spectrum = Spectrum::of(&mid, song.sample_rate);
-    let (onsets, pulse) = rhythm::onsets_and_pulse(&spectrum);
+    let sides = [song.left(), song.right()].map(|side| Spectrum::of(side, song.sample_rate));
+    let (onsets, pulse) = rhythm::onsets_and_pulse(&spectrum, &sides);
     let stereo = stereo(song);
     let hop_s = stereo.hop_s;
 
     let (loudness, momentary) = loudness(song, hop_s);
     let intensity = intensity(&momentary, hop_s);
-    let band_levels = band_levels(&spectrum, hop_s, stereo.left.len());
+    let levels = |spectrum: &Spectrum| band_levels(spectrum, hop_s, stereo.left.len());
+    let (band_levels, side_levels) = (levels(&spectrum), sides.each_ref().map(levels));
     let (change, boundaries) = sections::hear(&band_levels, hop_s);
 
     let onset_rate = |start_s: f64, end_s: f64| {
@@ -183,6 +189,7 @@ pub fn analyse(song: &Song) -> Analysis {
         sections,
         stereo,
         band_levels,
+        side_levels,
     }
 }
 

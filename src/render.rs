@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use wgpu::util::DeviceExt;
 
-use crate::place::{LANTERN_FLOATS, Moment, Place, ROW_M, VERTEX_FLOATS, row_at};
+use crate::place::{FORM_FLOATS, LANTERN_FLOATS, Moment, Place, ROW_M, VERTEX_FLOATS, row_at};
 
 /// Pictures are drawn in linear light into an sRGB target, for a still and a window alike.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -24,9 +24,9 @@ const SAMPLES: u32 = 4;
 const NEAR_M: f64 = 1.0;
 const FAR_M: f64 = 60_000.0;
 /// The most impulses drawn at once; the shader's array is this long. With them, the
-/// shader is told this many floats of each moment: a matrix, nine vectors and the rings.
-const MOST_RINGS: usize = 12;
-const UNIFORM_FLOATS: usize = 16 + 4 * 9 + 4 * MOST_RINGS;
+/// shader is told this many floats of each moment: a matrix, nine vectors and the lights.
+const MOST_LIGHTS: usize = 12;
+const UNIFORM_FLOATS: usize = 16 + 4 * 9 + 4 * MOST_LIGHTS;
 /// Positions reach the GPU relative to a point near the camera, on a grid this coarse,
 /// so that tens of kilometres along the route cost no precision.
 const ORIGIN_GRID_M: f64 = 256.0;
@@ -150,12 +150,16 @@ fn texture(
 pub struct Renderer {
     sky: wgpu::RenderPipeline,
     ground: wgpu::RenderPipeline,
+    forms: wgpu::RenderPipeline,
     lanterns: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
+    /// The boxes of the forms and the lanterns, and how many there are of each.
+    boxes: wgpu::Buffer,
     instances: wgpu::Buffer,
+    form_count: u32,
     /// Where the picture is drawn, several samples to the pixel, before it is resolved
     /// into the target; and the depth that goes with it.
     drawn: wgpu::TextureView,
@@ -206,8 +210,8 @@ impl Renderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        // The sky is behind everything; the ground hides what is behind it; lanterns add
-        // their light on top of whatever ground does not hide them.
+        // The sky is behind everything; the ground and the forms hide what is behind them;
+        // lanterns add their light on top of whatever does not hide them.
         let pipeline = |name: &str,
                         buffers: &[Option<wgpu::VertexBufferLayout>],
                         blend: Option<wgpu::BlendState>,
@@ -255,12 +259,17 @@ impl Renderer {
         let vertex = wgpu::VertexBufferLayout {
             array_stride: (4 * VERTEX_FLOATS) as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32],
         };
         let lantern = wgpu::VertexBufferLayout {
             array_stride: (4 * LANTERN_FLOATS) as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32],
+        };
+        let form = wgpu::VertexBufferLayout {
+            array_stride: (4 * FORM_FLOATS) as u64,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+            ..lantern.clone()
         };
 
         let ground = place.ground();
@@ -272,13 +281,18 @@ impl Renderer {
                 [corner, beyond, beside, beside, beyond, beyond + 1]
             })
             .collect();
-        let lanterns = place.lanterns();
+        let (forms, lanterns) = (place.forms(), place.lanterns());
         let buffer = |contents: &[u8], usage| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents,
                 usage,
             })
+        };
+        // A buffer may not be empty, so a place with no forms or lanterns still holds room for one.
+        let instances = |floats: &[f32]| {
+            let room = [floats, &[0.0; FORM_FLOATS]].concat();
+            buffer(&bytes(&room), wgpu::BufferUsages::VERTEX)
         };
         let sky = &place.sky;
         let length = SUN_TOWARD
@@ -294,6 +308,7 @@ impl Renderer {
         Renderer {
             sky: pipeline("sky", &[], None, false),
             ground: pipeline("ground", &[Some(vertex)], None, true),
+            forms: pipeline("form", &[Some(form)], None, true),
             lanterns: pipeline(
                 "lantern",
                 &[Some(lantern)],
@@ -313,11 +328,9 @@ impl Renderer {
                     .collect::<Vec<u8>>(),
                 wgpu::BufferUsages::INDEX,
             ),
-            // A buffer may not be empty, so a place with no lanterns still holds room for one.
-            instances: buffer(
-                &bytes(&[lanterns.as_slice(), &[0.0; LANTERN_FLOATS]].concat()),
-                wgpu::BufferUsages::VERTEX,
-            ),
+            boxes: instances(&forms),
+            instances: instances(&lanterns),
+            form_count: (forms.len() / FORM_FLOATS) as u32,
             drawn: texture(device, size, FORMAT, SAMPLES).create_view(&Default::default()),
             depth: texture(device, size, DEPTH, SAMPLES).create_view(&Default::default()),
             lantern_count: (lanterns.len() / LANTERN_FLOATS) as u32,
@@ -375,7 +388,7 @@ impl Renderer {
             -dot(forward, eye),
         ];
 
-        let shown = &moment.impulses[moment.impulses.len().saturating_sub(MOST_RINGS)..];
+        let shown = &moment.impulses[moment.impulses.len().saturating_sub(MOST_LIGHTS)..];
         let mut uniforms: Vec<f64> = [column(0), column(1), column(2), last].concat();
         uniforms.extend([origin[0], 0.0, origin[1], moment.light]);
         uniforms.extend([eye[0], eye[1], eye[2], f64::from(self.haze_per_m)]);
@@ -394,7 +407,8 @@ impl Renderer {
         }
         uniforms.extend(colours);
         for impulse in shown {
-            uniforms.extend([eye[0], eye[2], impulse.reach_m, impulse.level].map(|v| v as f32));
+            let side = impulse.side as i32 as f64 - 1.0;
+            uniforms.extend([side, 0.0, impulse.reach_m, impulse.level].map(|v| v as f32));
         }
         uniforms.resize(UNIFORM_FLOATS, 0.0);
         uniforms
@@ -445,10 +459,17 @@ impl Renderer {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(first * self.row_indices..end * self.row_indices, 0, 0..1);
 
-        if self.lantern_count > 0 {
-            pass.set_pipeline(&self.lanterns);
-            pass.set_vertex_buffer(0, self.instances.slice(..));
-            pass.draw(0..6, 0..self.lantern_count);
+        // A form is a box of six faces, a lantern one face that is turned to the camera.
+        let instanced = [
+            (&self.forms, &self.boxes, 36, self.form_count),
+            (&self.lanterns, &self.instances, 6, self.lantern_count),
+        ];
+        for (pipeline, instances, corners, count) in instanced {
+            if count > 0 {
+                pass.set_pipeline(pipeline);
+                pass.set_vertex_buffer(0, instances.slice(..));
+                pass.draw(0..corners, 0..count);
+            }
         }
     }
 }

@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 
-use crate::analysis::{Analysis, Section, smooth};
+use crate::analysis::{Analysis, BANDS, Part, Section, smooth};
 
 /// Speed along the route at intensity 0 and at intensity 1, in metres per second of song.
 /// Between them each equal step of intensity multiplies it alike.
@@ -37,13 +37,35 @@ const BANK_MAX_DEG: f64 = 18.0;
 const BANK_TURNING_DEG_S: f64 = 16.0;
 /// A region takes over from the one before across this length, centred on the boundary.
 const BLEND_M: f64 = 120.0;
-/// Half the width of the floor the route runs along, which widens as speed does but
-/// less, and the height the land beside it rises to, at intensity 0 and at intensity 1.
+/// Half the width of the floor the route runs along, at intensity 0 and at intensity 1:
+/// it widens as speed does but less.
 const FLOOR_M: (f64, f64) = (25.0, 80.0);
-const RELIEF_M: (f64, f64) = (45.0, 650.0);
-/// The land climbs from the floor to its full height across this length.
-const RISE_M: f64 = 450.0;
-/// The size of the largest landforms.
+/// The land beside the route is the song's spectrum: low sounds stand near the route and
+/// high sounds far out, on the left as the left channel has them and on the right as the
+/// right. A band stands between 0 and 1 by where its level lies in its own range in the
+/// song, from its 10th to its 99th percentile. That range counts as this many decibels at
+/// least and at most, and a band that stays this far under the song's loudest band is
+/// measured against that band instead, so that what is hardly there does not stand tall.
+const BAND_RANGE_DB: (f32, f32) = (6.0, 36.0);
+const BAND_UNDER_DB: f32 = 24.0;
+/// Along the route a band is smoothed over this many times its own width across the
+/// land, and over this many rows at least, so that what it does is about as long as it
+/// is wide: a hill, not a rib across the land or a strip along it. What it does over
+/// this many times that length is its standing, which counts for this much of its
+/// height; what it does apart from its standing counts this many times over.
+const ALONG: (f64, usize) = (1.5, 4);
+const STANDING: (usize, f32) = (6, 0.7);
+const OWN: f32 = 3.0;
+/// What a channel has that the other has not counts this many times over, so that the
+/// two sides of a song mixed nearly alike are not mirror images.
+const APART: f32 = 3.0;
+/// A band at full strength stands this tall at the far edge of the land, and nearer the
+/// route by this power of the distance. Strength counts by a power between these two:
+/// the first where the region is rounded, the second where it is sharp.
+const RELIEF_M: f64 = 1500.0;
+const SWEEP: f64 = 0.75;
+const CREST: (f64, f64) = (1.5, 3.0);
+/// The size of the swell of the floor.
 const LANDFORM_M: f64 = 800.0;
 /// The ground is laid in rows this far apart, from this far behind the start to this far
 /// beyond the end, and reaches this far to either side of the route.
@@ -52,21 +74,36 @@ const BEHIND_M: f64 = 200.0;
 const BEYOND_M: f64 = 7000.0;
 const HALF_WIDTH_M: f64 = 4200.0;
 const COLUMNS: usize = 193;
-/// An impulse is in play for this long after its onset. Its ring of light starts this many
-/// camera heights from the point under the camera, where the ground comes into view, and
-/// runs on from there at this many camera heights a second.
+/// An onset that stands out is met by a form, which is in play for this long after its
+/// onset: its light runs up the land beside the route from the floor's edge, at this many
+/// floor half-widths a second. A form is in view from this far ahead.
 const IMPULSE_LIFE_S: f64 = 0.45;
-const RING_START: f64 = 1.7;
-const RING_SPEED: f64 = 10.0;
+const LIGHT_RUNS: f64 = 10.0;
+const SIGHT_M: f64 = 3000.0;
+/// An onset this many decibels louder in one channel stands on that side alone.
+const LEAN_DB: f32 = 3.0;
+/// The forms: a rib across the floor for a low onset, standing stones beside the route
+/// for a middle one, thin masts for a high one. For each, in floor half-widths: where it
+/// stands from the middle of the route, half its width across the route, half its depth
+/// along it, and its height at level 0 and at level 1.
+const FORMS: [(f64, f64, f64, (f64, f64)); 3] = [
+    (0.5, 0.5, 0.015, (0.015, 0.03)),
+    (0.9, 0.06, 0.06, (0.5, 1.0)),
+    (0.55, 0.012, 0.012, (1.6, 3.0)),
+];
+const SUNK_M: f64 = 3.0;
 /// An onset this strong among the song's own onsets gives an impulse at full level.
 const FULL_LEVEL_PERCENTILE: usize = 90;
 /// A section fuller than this makes rounded land; the thinner its sound, the sharper its land.
 const SHARP_BELOW: f64 = 0.8;
 
-/// Floats per ground vertex: position, normal, accent colour, glow.
-pub const VERTEX_FLOATS: usize = 10;
+/// Floats per ground vertex: position, normal, accent colour, glow, and how far past
+/// the floor's edge it lies, in metres: below zero on the left, zero on the floor.
+pub const VERTEX_FLOATS: usize = 11;
 /// Floats per lantern: position, level, radius.
 pub const LANTERN_FLOATS: usize = 5;
+/// Floats per box of a form: see `Place::forms`.
+pub const FORM_FLOATS: usize = 6;
 
 /// What a song becomes: the route, the regions along it and the impulses on it.
 pub struct Place {
@@ -84,6 +121,9 @@ pub struct Place {
     distance: Vec<f64>,
     across: Vec<f64>,
     regions: Vec<Region>,
+    /// How strongly each band stands on each row of ground, from 0 to 1: the left
+    /// channel's bands and the right's, low to high.
+    land: Vec<[[f32; BANDS]; 2]>,
     impulses: Vec<Impulse>,
     pub sky: Sky,
 }
@@ -97,14 +137,26 @@ struct Region {
     sharpness: f32,
 }
 
-/// The place's answer to one onset: a lantern on the route where the onset sounds, and
-/// a ring of light that runs out from under the camera once it has sounded.
+/// The place's answer to one onset, standing where the route is as the onset sounds: a
+/// form where the onset stands out, and a small lantern on the route where it does not.
 struct Impulse {
     onset_s: f64,
     origin_m: [f64; 2],
     level: f64,
-    /// Height of the camera as it passes.
+    /// Height of the camera as it passes, and half the width of the floor there.
     altitude_m: f64,
+    floor_m: f64,
+    /// The kind of form, by the part of the sound that jumped, and the side it stands on.
+    form: Option<(Part, Side)>,
+}
+
+/// Where a form stands: on the side of the channel its onset is louder in, or on both.
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Left,
+    Centre,
+    Right,
 }
 
 /// What the fingerprint gives the whole place: its palette and its weather.
@@ -149,8 +201,11 @@ pub struct Moment {
     pub nearer: f64,
     /// The accent colour of the land around the listener, which tints the air.
     pub accent: [f32; 3],
-    /// The impulses in play, oldest first.
+    pub land: Profile,
+    /// The impulses in play, oldest first: the forms whose onsets have just sounded.
     pub impulses: Vec<ImpulseInPlay>,
+    /// The forms in view, as the listener meets them: those in play, then those ahead.
+    pub forms: Vec<FormInView>,
 }
 
 #[derive(Serialize)]
@@ -162,14 +217,34 @@ pub struct Camera {
     pub bank_deg: f64,
 }
 
+/// The land across the route at the listener's position: its height above the floor on
+/// the left and on the right, at each distance from the middle of the route where a band
+/// of the sound stands. The floor's own swell of a few metres is not in it.
+#[derive(Serialize)]
+pub struct Profile {
+    pub across_m: Vec<f64>,
+    pub left_m: Vec<f64>,
+    pub right_m: Vec<f64>,
+}
+
 #[derive(Serialize)]
 pub struct ImpulseInPlay {
     pub onset_s: f64,
     pub age_s: f64,
     /// From 1 at a strong onset as it sounds down to 0 as the impulse dies away.
     pub level: f64,
-    /// How far its ring has run from the point under the camera.
+    /// How far past the floor's edge its light has run up the land, and on which side.
     pub reach_m: f64,
+    pub side: Side,
+}
+
+#[derive(Serialize)]
+pub struct FormInView {
+    /// The song time of its onset, and where on the route it stands.
+    pub onset_s: f64,
+    pub route_m: f64,
+    pub kind: Part,
+    pub side: Side,
 }
 
 /// A summary of the place, written beside each still. No pulse is in it because none
@@ -179,6 +254,7 @@ pub struct Summary {
     pub route_length_m: f64,
     pub regions: usize,
     pub impulses: usize,
+    pub forms: usize,
 }
 
 fn mix(a: f64, b: f64, share: f64) -> f64 {
@@ -206,9 +282,14 @@ fn ease(share: f64) -> f64 {
     u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
 }
 
-/// A curve read at any song time without corners at its steps (Catmull-Rom through the
-/// middle of each step).
+/// A curve from 0 to 1 read at any song time without corners at its steps.
 fn read(values: &[f32], hop_s: f64, time_s: f64) -> f64 {
+    through(values, hop_s, time_s).clamp(0.0, 1.0)
+}
+
+/// Any curve read between its steps without corners (Catmull-Rom through the middle of
+/// each step), which may take it a little past the values either side.
+fn through(values: &[f32], hop_s: f64, time_s: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
@@ -221,7 +302,7 @@ fn read(values: &[f32], hop_s: f64, time_s: f64) -> f64 {
         2.0 * a - 5.0 * b + 4.0 * c - d,
         3.0 * (b - c) + d - a,
     );
-    (b + 0.5 * u * (p + u * (q + u * r))).clamp(0.0, 1.0)
+    b + 0.5 * u * (p + u * (q + u * r))
 }
 
 /// A colour from hue (in turns), saturation and value, as linear light.
@@ -256,6 +337,7 @@ impl Place {
             distance: vec![0.0],
             across: vec![0.0],
             regions: Vec::new(),
+            land: Vec::new(),
             impulses: Vec::new(),
             sky: Sky {
                 zenith: colour(hue(fingerprint.brightness) - 0.13, 0.75, 0.1),
@@ -294,6 +376,7 @@ impl Place {
             sharpness: ((SHARP_BELOW - section.fullness) / 0.5).clamp(0.0, 1.0) as f32,
         };
         place.regions = analysis.sections.iter().map(region).collect();
+        place.land = place.raised(&analysis.side_levels);
 
         let mut strengths: Vec<f32> = analysis.onsets.iter().map(|onset| onset.strength).collect();
         strengths.sort_by(f32::total_cmp);
@@ -308,6 +391,15 @@ impl Place {
                 origin_m: [place.across(onset.time_s), place.distance_at(onset.time_s)],
                 level: (f64::from(onset.strength) / full).min(1.0),
                 altitude_m: place.altitude(onset.time_s),
+                floor_m: scale(FLOOR_M, read(&place.intensity, hop_s, onset.time_s)),
+                form: onset.stands_out.then_some((
+                    onset.part,
+                    match onset.lean_db {
+                        lean if lean < -LEAN_DB => Side::Left,
+                        lean if lean > LEAN_DB => Side::Right,
+                        _ => Side::Centre,
+                    },
+                )),
             })
             .collect();
         place
@@ -318,6 +410,7 @@ impl Place {
             route_length_m: self.distance_at(self.duration_s),
             regions: self.regions.len(),
             impulses: self.impulses.len(),
+            forms: self.impulses.iter().filter(|i| i.form.is_some()).count(),
         }
     }
 
@@ -403,6 +496,13 @@ impl Place {
             .impulses
             .partition_point(|i| i.onset_s <= time_s - IMPULSE_LIFE_S);
         let end = self.impulses.partition_point(|i| i.onset_s <= time_s);
+        let seen = self
+            .impulses
+            .partition_point(|i| i.origin_m[1] <= along + SIGHT_M);
+        let forms = |impulses: std::ops::Range<usize>| {
+            let impulses = self.impulses[impulses].iter();
+            impulses.filter_map(|impulse| Some((impulse, impulse.form?)))
+        };
         Moment {
             song_time_s: time_s,
             route_position_m: along,
@@ -421,29 +521,68 @@ impl Place {
             past_land_per_s: speed / scale(FLOOR_M, light),
             nearer,
             accent: self.character(along).0,
-            impulses: self.impulses[first..end]
-                .iter()
-                .map(|impulse| {
+            land: self.profile(along, light),
+            impulses: forms(first..end)
+                .map(|(impulse, (_, side))| {
                     let age_s = time_s - impulse.onset_s;
                     ImpulseInPlay {
                         onset_s: impulse.onset_s,
                         age_s,
                         level: impulse.level * (1.0 - age_s / IMPULSE_LIFE_S).powi(2),
-                        reach_m: impulse.altitude_m / nearer * (RING_START + RING_SPEED * age_s),
+                        reach_m: impulse.floor_m * LIGHT_RUNS * age_s,
+                        side,
                     }
+                })
+                .collect(),
+            forms: forms(first..seen.max(end))
+                .map(|(impulse, (kind, side))| FormInView {
+                    onset_s: impulse.onset_s,
+                    route_m: impulse.origin_m[1],
+                    kind,
+                    side,
                 })
                 .collect(),
         }
     }
 
-    /// One lantern for each impulse, where its onset sounds: across, up, along, level, radius.
+    /// One lantern for each onset that does not stand out, where it sounds: across, up,
+    /// along, level, radius.
     pub fn lanterns(&self) -> Vec<f32> {
         let lantern = |i: &Impulse| {
             let [x, z] = i.origin_m.map(|m| m as f32);
             let radius = i.altitude_m * (0.02 + 0.06 * i.level);
             [x, swell(x, z), z, i.level as f32, radius as f32]
         };
-        self.impulses.iter().flat_map(lantern).collect()
+        let lesser = self.impulses.iter().filter(|i| i.form.is_none());
+        lesser.flat_map(lantern).collect()
+    }
+
+    /// The forms as boxes, one on each side a form stands on: the middle of its foot
+    /// (across, up, along), half its width across the route, its height, and half its
+    /// depth along the route.
+    pub fn forms(&self) -> Vec<f32> {
+        let mut boxes = Vec::new();
+        for impulse in &self.impulses {
+            let Some((part, side)) = impulse.form else {
+                continue;
+            };
+            let (out, across, along, tall) = FORMS[part as usize];
+            let sides: &[f64] = match side {
+                Side::Left => &[-1.0],
+                Side::Centre => &[-1.0, 1.0],
+                Side::Right => &[1.0],
+            };
+            let ([x, z], floor) = (impulse.origin_m, impulse.floor_m);
+            // Its foot is sunk into the ground, which is nowhere quite level.
+            let foot = f64::from(swell(x as f32, z as f32)) - SUNK_M;
+            let height = mix(tall.0, tall.1, impulse.level) * floor + SUNK_M;
+            for toward in sides {
+                let x = x + toward * out * floor;
+                let form = [x, foot, z, across * floor, height, along * floor];
+                boxes.extend(form.map(|part| part as f32));
+            }
+        }
+        boxes
     }
 
     /// The accent colour and sharpness of the land at a distance along the route: each
@@ -474,43 +613,121 @@ impl Place {
         (self.rows() > rows).then(|| self.time_at(route_m))
     }
 
+    /// How strongly each band of each side stands on each row of ground.
+    fn raised(&self, sides: &[Vec<[f32; BANDS]>; 2]) -> Vec<[[f32; BANDS]; 2]> {
+        let range = |band: usize| {
+            let mut levels: Vec<f32> = sides.iter().flatten().map(|step| step[band]).collect();
+            levels.sort_by(f32::total_cmp);
+            let share = |of: usize| levels.get(levels.len().saturating_sub(1) * of / 100);
+            [10, 99].map(|of| share(of).map_or(0.0, |level| *level))
+        };
+        let ranges: [[f32; 2]; BANDS] = std::array::from_fn(range);
+        let loudest = ranges.iter().map(|range| range[1]).fold(f32::MIN, f32::max);
+        let rows = self.rows();
+        // The song time at which each row begins, and that at which the last one ends.
+        let edges: Vec<f64> = (0..=rows)
+            .map(|row| self.time_at((row as f64 - 0.5) * ROW_M - BEHIND_M))
+            .collect();
+        let mut land = vec![[[0.0; BANDS]; 2]; rows];
+        for (side, levels) in sides.iter().enumerate() {
+            for band in 0..BANDS {
+                let high = ranges[band][1].max(loudest - BAND_UNDER_DB);
+                let low = ranges[band][0].clamp(high - BAND_RANGE_DB.1, high - BAND_RANGE_DB.0);
+                // How the band stands as a running total over the song, so that a row of
+                // ground takes the mean over the time it covers.
+                let mut total = vec![0.0f64];
+                let stands = |level: f32| ((level - low) / (high - low)).clamp(0.0, 1.0);
+                for (step, other) in levels.iter().zip(&sides[1 - side]) {
+                    let (here, there) = (stands(step[band]), stands(other[band]));
+                    let here = (here + (APART - 1.0) / 2.0 * (here - there)).clamp(0.0, 1.0);
+                    total.push(total[total.len() - 1] + f64::from(here));
+                }
+                let until = |time_s: f64| {
+                    let x = time_s / self.hop_s;
+                    let step = (x.max(0.0) as usize).min(total.len().saturating_sub(2));
+                    let stands = total.get(step + 1).map_or(0.0, |next| next - total[step]);
+                    total[step] + stands * (x - step as f64)
+                };
+                let mean = |row: &[f64]| (until(row[1]) - until(row[0])) / (row[1] - row[0]);
+                let stands: Vec<f32> = edges
+                    .windows(2)
+                    .map(|row| (mean(row) * self.hop_s) as f32)
+                    .collect();
+                let width = band_m(band as f64 + 0.5) - band_m(band as f64 - 0.5);
+                let reach = ((ALONG.0 * width / ROW_M).round() as usize).max(ALONG.1);
+                let stands = smooth(&stands, reach);
+                let standing = smooth(&stands, STANDING.0 * reach);
+                for (row, (stands, standing)) in stands.iter().zip(&standing).enumerate() {
+                    land[row][side][band] =
+                        (STANDING.1 * standing + OWN * (stands - standing)).max(0.0);
+                }
+            }
+        }
+        land
+    }
+
+    /// The height of the land above the floor on a row of ground, on the left (0) or the
+    /// right (1), so far past the floor's edge.
+    fn stands(&self, row: usize, side: usize, beyond_m: f64, sharpness: f32) -> f64 {
+        if beyond_m <= 0.0 {
+            return 0.0;
+        }
+        let strength = through(&self.land[row][side], 1.0, band_at(beyond_m) + 0.5).max(0.0);
+        let crest = mix(CREST.0, CREST.1, f64::from(sharpness));
+        // The land climbs out of the floor over the reach of the lowest band.
+        RELIEF_M
+            * (beyond_m / HALF_WIDTH_M).powf(SWEEP)
+            * ease(beyond_m / band_m(0.0))
+            * strength.powf(crest)
+    }
+
+    /// The land across the route at a distance along it, where the song's intensity is as given.
+    fn profile(&self, route_m: f64, intensity: f64) -> Profile {
+        let row = row_at(route_m + ROW_M / 2.0).min(self.land.len() - 1);
+        let sharpness = self.character(route_m).1;
+        let side = |side: usize| {
+            (0..BANDS)
+                .map(|band| self.stands(row, side, band_m(band as f64), sharpness))
+                .collect()
+        };
+        Profile {
+            across_m: (0..BANDS)
+                .map(|band| scale(FLOOR_M, intensity) + band_m(band as f64))
+                .collect(),
+            left_m: side(0),
+            right_m: side(1),
+        }
+    }
+
     /// Builds the ground of the whole place: a floor along the route that widens with
-    /// intensity, and land to either side that rises higher the harder the song pushes.
+    /// intensity, and to either side the land the song raises.
     pub fn ground(&self) -> Ground {
         let rows = self.rows();
         let mut positions = Vec::with_capacity(rows * COLUMNS);
-        let mut paint = Vec::with_capacity(rows);
+        let mut paint = Vec::with_capacity(rows * COLUMNS);
         for row in 0..rows {
             let along = row as f64 * ROW_M - BEHIND_M;
             let time_s = self.time_at(along);
             let intensity = read(&self.intensity, self.hop_s, time_s);
             let (accent, sharpness) = self.character(along);
             let centre = self.across(time_s);
-            let (floor, relief) = (
-                scale(FLOOR_M, intensity),
-                mix(RELIEF_M.0, RELIEF_M.1, intensity),
-            );
+            let floor = scale(FLOOR_M, intensity);
             for column in 0..COLUMNS {
                 // Columns crowd toward the route, where the camera is.
-                let u = column as f64 / (COLUMNS - 1) as f64 * 2.0 - 1.0;
-                let across = HALF_WIDTH_M * (0.12 * u + 0.88 * u * u * u);
+                let across = crowd(column as f64 / (COLUMNS - 1) as f64 * 2.0 - 1.0);
                 let x = centre + across;
-                let (px, pz) = ((x / LANDFORM_M) as f32, (along / LANDFORM_M) as f32);
-                let rounded = fractal(px, pz);
-                let ridged = 1.0 - (2.0 * fractal(1.7 * px + 37.0, 1.7 * pz + 11.0) - 1.0).abs();
-                let shape = rounded + (ridged * ridged * ridged - rounded) * sharpness;
-                let rise = ease((across.abs() - floor) / RISE_M)
-                    * (0.6 + 0.4 * (across.abs() / HALF_WIDTH_M));
-                let height = relief * rise * (0.2 + 0.8 * f64::from(shape))
+                let beyond = (across.abs() - floor).max(0.0);
+                let height = self.stands(row, usize::from(across > 0.0), beyond, sharpness)
                     + f64::from(swell(x as f32, along as f32));
                 positions.push([x as f32, height as f32, along as f32]);
+                let beyond = beyond.copysign(across) as f32;
+                paint.push([accent[0], accent[1], accent[2], intensity as f32, beyond]);
             }
-            paint.push([accent[0], accent[1], accent[2], intensity as f32]);
         }
 
         let mut vertices = Vec::with_capacity(rows * COLUMNS * VERTEX_FLOATS);
         let at = |row: usize, column: usize| positions[row * COLUMNS + column];
-        for (row, paint) in paint.iter().enumerate() {
+        for row in 0..rows {
             for column in 0..COLUMNS {
                 // The normal stands across the two directions the ground runs in here.
                 let along = sub(
@@ -529,7 +746,7 @@ impl Place {
                 let length = normal.iter().map(|n| n * n).sum::<f32>().sqrt();
                 vertices.extend(at(row, column));
                 vertices.extend(normal.map(|n| n / length));
-                vertices.extend(paint);
+                vertices.extend(paint[row * COLUMNS + column]);
             }
         }
         Ground {
@@ -538,6 +755,26 @@ impl Place {
             vertices,
         }
     }
+}
+
+/// How far from the middle of the land a share of its half-width lies: the columns of
+/// ground crowd toward the route, and the bands of the sound with them.
+fn crowd(share: f64) -> f64 {
+    HALF_WIDTH_M * (0.12 * share + 0.88 * share * share * share)
+}
+
+/// How far past the floor's edge a band stands: the middle of band 0 at 0, and so on.
+fn band_m(band: f64) -> f64 {
+    crowd((band + 0.5) / BANDS as f64)
+}
+
+/// The band that stands so far past the floor's edge, as `band_m` has it.
+fn band_at(beyond_m: f64) -> f64 {
+    let above = (1..BANDS - 1)
+        .find(|band| band_m(*band as f64) > beyond_m)
+        .unwrap_or(BANDS - 1);
+    let (near, far) = (band_m(above as f64 - 1.0), band_m(above as f64));
+    above as f64 - 1.0 + (beyond_m - near) / (far - near)
 }
 
 /// The gentle rise and fall of the ground everywhere, the floor of the route included.

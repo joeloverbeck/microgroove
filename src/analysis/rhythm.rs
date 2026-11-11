@@ -11,6 +11,21 @@ pub struct Onset {
     pub time_s: f64,
     /// How sharply the sound rose: the rise in log amplitude, averaged over the bands.
     pub strength: f32,
+    /// The part of the sound that jumped most, measured against the song's other onsets.
+    pub part: Part,
+    /// How far the jump leans to the right channel, in decibels: below zero, to the left.
+    pub lean_db: f32,
+    /// Whether the onset stands out among the song's onsets.
+    pub stands_out: bool,
+}
+
+/// The lowest, the middle or the highest third of the bands.
+#[derive(Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Part {
+    Low,
+    Middle,
+    High,
 }
 
 /// The song's steady beat. `bpm` is absent and `trusted` is empty where no steady
@@ -36,6 +51,16 @@ const ONSET_SEPARATION_S: f64 = 0.03;
 /// The share of a frame, at its newest edge, in which a new sound is still too
 /// tapered to register. Measured with clicks at every alignment to the frames.
 const TAPER_HIDES: f64 = 0.25;
+/// A jump is taken over this many frames from the onset's, against the loudest of this
+/// many frames before it.
+const JUMP_FRAMES: (usize, usize) = (3, 5);
+/// Tuning: an onset stands out when its jump scores this much against the jumps of the
+/// song's strong onsets, those at this percentile, and no onset within this many seconds
+/// of it scores higher. Both bars are the song's own, so a song with no strong onsets
+/// still has some that stand out.
+const STANDS_OUT: f32 = 0.75;
+const STRONG_PERCENTILE: usize = 90;
+const STANDS_APART_S: f64 = 0.2;
 
 /// Rise of each band's compressed amplitude above the loudest it has just been,
 /// averaged over the bands. "Just" is the frames that overlap this one: a steady low
@@ -74,23 +99,89 @@ fn excesses(rises: &[f32], hop_s: f64) -> Vec<f32> {
         .collect()
 }
 
-pub fn onsets_and_pulse(spectrum: &Spectrum) -> (Vec<Onset>, Pulse) {
+/// How each band jumps at an onset in frame `n`: the rise of its compressed amplitude,
+/// which counts a quiet sound like a loud one, and the power it gains, which does not.
+fn jumps(spectrum: &Spectrum, n: usize) -> impl Iterator<Item = (f32, f32)> + '_ {
+    let loudest = move |frames: std::ops::Range<usize>, band: usize| {
+        frames.map(|m| spectrum.frame(m)[band]).fold(0.0, f32::max)
+    };
+    (0..BANDS).map(move |band| {
+        let before = loudest(n.saturating_sub(JUMP_FRAMES.1)..n, band);
+        let after = loudest(n..(n + JUMP_FRAMES.0).min(spectrum.frames()), band);
+        let rise = ((1.0 + COMPRESSION_GAIN * after) / (1.0 + COMPRESSION_GAIN * before)).ln();
+        (rise.max(0.0), (after * after - before * before).max(0.0))
+    })
+}
+
+/// The onsets of the song as its two channels together have it, each with the part of
+/// the sound that jumped, the channel it leans to, and whether it stands out; and the pulse.
+pub fn onsets_and_pulse(spectrum: &Spectrum, sides: &[Spectrum; 2]) -> (Vec<Onset>, Pulse) {
     let rises = rises(spectrum);
     let excess = excesses(&rises, spectrum.hop_s);
     let reach = (ONSET_SEPARATION_S / spectrum.hop_s).round() as usize;
-    let mut onsets = Vec::new();
-    for n in 0..rises.len() {
-        if excess[n] > 0.0 && super::is_peak(&rises, n, reach) {
+    let frames: Vec<usize> = (0..rises.len())
+        .filter(|n| excess[*n] > 0.0 && super::is_peak(&rises, *n, reach))
+        .collect();
+    // Six measures of each onset: in each part of the sound, the rise averaged over its
+    // bands and then the amplitude gained there.
+    let jumped = |n: &usize| -> [f32; 6] {
+        let jumps: Vec<(f32, f32)> = jumps(spectrum, *n).collect();
+        std::array::from_fn(|measure| {
+            let bands = &jumps[measure / 2 * BANDS / 3..(measure / 2 + 1) * BANDS / 3];
+            if measure % 2 == 0 {
+                bands.iter().map(|jump| jump.0).sum::<f32>() / bands.len() as f32
+            } else {
+                bands.iter().map(|jump| jump.1).sum::<f32>().sqrt()
+            }
+        })
+    };
+    let jumped: Vec<[f32; 6]> = frames.iter().map(jumped).collect();
+    let strong: [f32; 6] = std::array::from_fn(|measure| {
+        let mut values: Vec<f32> = jumped.iter().map(|jump| jump[measure]).collect();
+        values.sort_by(f32::total_cmp);
+        let strong = values.get(values.len().saturating_sub(1) * STRONG_PERCENTILE / 100);
+        strong.copied().unwrap_or(0.0)
+    });
+    // An onset's score in a part of the sound sets its rise and its gain there against
+    // those of the song's strong onsets; its part is the one where it scores highest.
+    let score = |jump: &[f32; 6], part: usize| {
+        let (rise, gain) = (2 * part, 2 * part + 1);
+        let score = (jump[rise] / strong[rise] * jump[gain] / strong[gain]).sqrt();
+        if score.is_finite() { score } else { 0.0 }
+    };
+    let mut onsets: Vec<(f32, Onset)> = frames
+        .iter()
+        .zip(&jumped)
+        .map(|(n, jump)| {
+            let highest = |a: &usize, b: &usize| score(jump, *a).total_cmp(&score(jump, *b));
+            let part = (0..3).rev().max_by(highest).unwrap_or(0);
+            let gain = |side: &Spectrum| jumps(side, *n).map(|jump| jump.1).sum::<f32>().sqrt();
+            let [left, right] = sides.each_ref().map(|side| gain(side).max(1e-6));
             // A rise shows once the new sound is far enough into the frame for the
             // window's taper to let it through, so the sound began near the frame's
             // newest edge, not at its centre.
-            let time_s = n as f64 * spectrum.hop_s + (1.0 - TAPER_HIDES) * spectrum.window_s;
-            onsets.push(Onset {
+            let time_s = *n as f64 * spectrum.hop_s + (1.0 - TAPER_HIDES) * spectrum.window_s;
+            let onset = Onset {
                 time_s,
-                strength: rises[n],
-            });
-        }
+                strength: rises[*n],
+                part: [Part::Low, Part::Middle, Part::High][part],
+                lean_db: 20.0 * (right / left).log10(),
+                stands_out: false,
+            };
+            (score(jump, part), onset)
+        })
+        .collect();
+    // The highest scores first: each stands out unless one that already does is too near.
+    let mut order: Vec<usize> = (0..onsets.len()).collect();
+    order.sort_by(|a, b| onsets[*b].0.total_cmp(&onsets[*a].0));
+    for index in order {
+        let time_s = onsets[index].1.time_s;
+        let near = |other: &(f32, Onset)| {
+            other.1.stands_out && (other.1.time_s - time_s).abs() < STANDS_APART_S
+        };
+        onsets[index].1.stands_out = onsets[index].0 >= STANDS_OUT && !onsets.iter().any(near);
     }
+    let onsets = onsets.into_iter().map(|(_, onset)| onset).collect();
     (onsets, pulse(&excess, spectrum.hop_s))
 }
 

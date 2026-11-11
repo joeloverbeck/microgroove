@@ -190,6 +190,41 @@ fn intensity_follows_what_the_owner_hears_inside_the_verses() {
     );
 }
 
+/// Issue #7: the onsets that stand out, each of which the place makes a form of, come to
+/// between 0.7 and 2.5 a second over the song, and to fewer in the passages issue #1
+/// names as the quietest than in those it names as the loudest. All the onsets together
+/// come to about 7.5 a second in every part of the song.
+#[test]
+fn fewer_onsets_stand_out_where_the_song_is_quiet_than_where_it_is_loud() {
+    let Some(heard) = first_journey("onsets that stand out") else {
+        return;
+    };
+    let onsets = heard["onsets"].as_array().unwrap().iter();
+    let standing_out = onsets.filter(|onset| onset["stands_out"] == true);
+    let times: Vec<f64> = standing_out.map(|onset| num(&onset["time_s"])).collect();
+    let rate = |(from_s, to_s): (f64, f64)| {
+        let within = times.iter().filter(|time| (from_s..to_s).contains(*time));
+        within.count() as f64 / (to_s - from_s)
+    };
+    let quiet = [(0.0, 28.0), (198.0, 210.0)].map(rate);
+    let loud = [
+        (94.0, 124.0),
+        (136.0, 152.0),
+        (210.0, 227.0),
+        (231.0, 243.0),
+    ]
+    .map(rate);
+    let by_twenty: Vec<f64> = (0..12)
+        .map(|n| 20.0 * rate((n as f64 * 20.0, n as f64 * 20.0 + 20.0)))
+        .collect();
+    let overall = rate((0.0, num(&heard["duration_s"])));
+    assert!(
+        (0.7..=2.5).contains(&overall) && quiet.iter().all(|q| loud.iter().all(|l| q < l)),
+        "{overall} a second over the song; {quiet:?} in the quietest passages, {loud:?} in the \
+         loudest; in each 20 s: {by_twenty:?}"
+    );
+}
+
 #[test]
 fn loudness_agrees_with_the_ebu_r128_reading_in_the_issue() {
     let Some(heard) = first_journey("loudness") else {
