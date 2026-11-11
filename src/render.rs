@@ -391,14 +391,14 @@ impl Renderer {
         let shown = &moment.impulses[moment.impulses.len().saturating_sub(MOST_LIGHTS)..];
         let mut uniforms: Vec<f64> = [column(0), column(1), column(2), last].concat();
         uniforms.extend([origin[0], 0.0, origin[1], moment.light]);
-        let haze = self.haze_per_m * moment.air;
-        uniforms.extend([eye[0], eye[1], eye[2], f64::from(haze)]);
+        let haze = f64::from(self.haze_per_m * moment.air);
+        uniforms.extend([eye[0], eye[1], eye[2], haze]);
         uniforms.extend(right.map(|part| part * half.0));
         uniforms.push(shown.len() as f64);
         uniforms.extend(up.map(|part| part * half.1));
         uniforms.push(1.0 / moment.nearer);
         uniforms.extend(forward);
-        uniforms.push(0.0);
+        uniforms.push(f64::from(moment.air));
         let mut uniforms: Vec<f32> = uniforms.iter().map(|value| *value as f32).collect();
         // The air takes on the accent of the land around the listener.
         let mut colours = self.place;

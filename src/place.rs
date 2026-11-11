@@ -73,7 +73,7 @@ const CARVED: [(f64, f64, f64, f64, f64); 4] = [
     (1500.0, 0.75, 3.0, -0.8, 150.0),
 ];
 /// Still water floods the land this deep: only what stands taller shows, as islands.
-const FLOOD_M: f64 = 9.0;
+const FLOOD_M: f64 = 12.0;
 /// Terraced rock stands in steps. Its first tread lies this high and each next one this
 /// many times higher, the same everywhere in the place; the last share of each step is
 /// its riser.

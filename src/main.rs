@@ -420,6 +420,7 @@ fn run(request: &Request) -> Result<(), String> {
         },
         "draw_ms": spread(draw_ms),
         "series": series,
+        "tiles": tiles,
     });
     let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));
     let name = format!("run-{from_s:08.3}-{to_s:08.3}.json");

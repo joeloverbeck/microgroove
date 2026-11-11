@@ -8,7 +8,7 @@ struct Moment {
     eye: vec4<f32>,      // xyz: the camera, from the origin. w: haze per metre.
     right: vec4<f32>,    // xyz: camera right, scaled by half the width of the view. w: impulses in play.
     up: vec4<f32>,       // xyz: camera up, scaled by half the height of the view. w: the size the dial leaves lanterns, of their own.
-    forward: vec4<f32>,
+    forward: vec4<f32>,  // w: how thick the air is around the listener, of the place's own.
     zenith: vec4<f32>,
     horizon: vec4<f32>,
     sun: vec4<f32>,
@@ -27,24 +27,28 @@ const GLOW: f32 = 0.55;
 const LIT: f32 = 0.6;
 const LIT_M: f32 = 1200.0;
 // Tuning, for still water, dunes, terraced rock and ice in turn: how far level ground
-// shines, and how coarse the grain of a slope is. Then the width of a streak of sand and
-// the thickness of a band of rock, in metres.
+// shines, and how coarse the grain of a slope is. Then the width and the length of a
+// streak of sand and the thickness of a band of rock, in metres.
 const SHINES = vec4<f32>(1.0, 0.0, 0.15, 0.6);
 const COARSE = vec4<f32>(0.6, 0.15, 1.6, 0.3);
-const STREAK_M: f32 = 1.3;
+const STREAK_M = vec2<f32>(2.0, 90.0);
 const STRATUM_M: f32 = 7.0;
+// An impulse's light counts each metre it climbs a wall of rock as this many it runs out.
+const CLIMBS: f32 = 2.5;
 
 fn light() -> f32 {
     return mix(LEAST_LIGHT, 1.0, moment.origin.w);
 }
 
 // The air in a direction, before the song's light is applied: a bright band along the
-// horizon under a dark zenith, and a low sun with a wide glow.
+// horizon under a dark zenith, and a low sun with a wide glow. Thick air veils the sun:
+// its disc dims and its glow spreads.
 fn air(toward: vec3<f32>) -> vec3<f32> {
     let height = clamp(toward.y, 0.0, 1.0);
     let sun = max(dot(toward, moment.sun_toward.xyz), 0.0);
+    let veil = max(moment.forward.w, 1.0);
     return mix(moment.horizon.rgb, moment.zenith.rgb, 1.0 - exp(-4.5 * height))
-        + moment.sun.rgb * (0.12 * pow(sun, 8.0) + 0.7 * pow(sun, 80.0) + 8.0 * pow(sun, 2500.0));
+        + moment.sun.rgb * (0.12 * veil * pow(sun, 8.0) + 0.7 / veil * pow(sun, 80.0) + 8.0 / (veil * veil) * pow(sun, 2500.0));
 }
 
 // A fixed value from 0 to 1 for each point of a grid, and smooth noise through them.
@@ -142,10 +146,13 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let tilt = vec2<f32>(noise(rough + vec2<f32>(0.3, 0.0)), noise(rough + vec2<f32>(0.0, 0.3))) - grain;
     let coarse = dot(in.kind, COARSE) * clamp(1.0 - range / 1500.0, 0.0, 1.0) * (1.0 - flat);
     // Sand that lies nearly level is combed in streaks that run with the route, so that
-    // they stream past the listener and never beat against the eye.
-    let phase = (across.x + 9.0 * noise(across / 160.0)) / STREAK_M;
-    let streak = dunes * smoothstep(0.6, 0.9, shape.y) * clamp(1.0 - fwidth(phase), 0.0, 1.0) * sin(phase);
-    let normal = normalize(shape - vec3<f32>(tilt.x * 1.5 * coarse + 0.3 * streak, 0.0, tilt.y * 1.5 * coarse));
+    // they stream past the listener and do not beat against the eye. No two are alike:
+    // even stripes over much of the picture would be hard on the eye.
+    let combed = across / STREAK_M;
+    let sand = noise(combed);
+    let comb = dunes * smoothstep(0.6, 0.9, shape.y) * clamp(1.0 - fwidth(combed.x), 0.0, 1.0);
+    let streak = comb * (noise(combed + vec2<f32>(0.4, 0.0)) - sand);
+    let normal = normalize(shape - vec3<f32>(tilt.x * 1.5 * coarse + 1.2 * streak, 0.0, tilt.y * 1.5 * coarse));
 
     // What each kind is made of: dark stone standing in the water, with a pale line
     // where the water meets it; pale sand; rock in bands that lie level through the
@@ -156,7 +163,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let banded = mix(1.0, mix(0.4, 1.9, band), clamp(1.0 - 1.5 * fwidth(layer), 0.0, 1.0));
     let shore = (1.0 - flat) * (1.0 - smoothstep(0.3, 1.5, in.point.y));
     let matter = (water * mix(stone, vec3<f32>(0.5), shore)
-            + dunes * mix(vec3<f32>(0.34), accent, 0.4) * (1.0 + 0.2 * streak)
+            + dunes * mix(vec3<f32>(0.34), accent, 0.4) * (1.0 + 0.3 * comb * (sand - 0.5))
             + rock * stone * banded
             + ice * mix(vec3<f32>(0.5), accent, 0.3))
         * (1.0 + 0.8 * (grain - 0.5) * coarse) * (1.0 - 0.6 * wet);
@@ -182,19 +189,21 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let seam = (1.0 - smoothstep(0.02, 0.04 + fine, abs(fract(level) - 0.5)))
         * clamp(1.0 - 2.5 * fine, 0.0, 1.0)
         * smoothstep(0.42, 0.62, noise(across / 140.0 + vec2<f32>(floor(level) * 7.0)));
-    let cracks = mix(1.0, abs(2.0 * noise(across / 23.0) - 1.0), rock * flat);
+    let cracks = mix(1.0, abs(2.0 * noise(across / 23.0) - 1.0), (rock + ice) * flat);
     let wander = min(abs(2.0 * noise(across / 80.0) - 1.0), cracks);
     let vein = (1.0 - smoothstep(0.0, 0.015 + 1.5 * fwidth(wander), wander))
-        * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - wet);
+        * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - flat * (water + dunes));
     colour += accent * in.paint.a * in.paint.a * GLOW * (0.04 + rock * seam + 0.5 * (1.0 - water) * vein);
 
-    // Each impulse in play lights the land beside the route, never its level floor: a
+    // Each impulse in play lights the land beside the route, never level ground: a
     // front of light that runs up the land from the floor's edge, with a glow behind it.
+    // A wall of rock it climbs, so that it is a line on the wall and never the whole of it.
+    let climbed = abs(in.beyond) + CLIMBS * rock * max(in.point.y, 0.0);
     for (var i = 0; i < i32(moment.right.w); i++) {
         let lit = moment.lights[i];
-        let behind = (lit.z - abs(in.beyond)) / (10.0 + 0.4 * lit.z);
+        let behind = (lit.z - climbed) / (10.0 + 0.4 * lit.z);
         let front = smoothstep(-0.2, 0.0, behind) * exp(-2.5 * max(behind, 0.0));
-        let land = (1.0 - wet) * smoothstep(0.0, 4.0, abs(in.beyond)) * step(-0.5, in.beyond * lit.x);
+        let land = (1.0 - flat) * smoothstep(0.0, 4.0, abs(in.beyond)) * step(-0.5, in.beyond * lit.x);
         colour += mix(accent, vec3<f32>(1.0), 0.5) * lit.w * LIT * (0.5 + grain) * front * land * exp(-range / LIT_M);
     }
     return vec4<f32>(hazed(colour, toward, range), 1.0);
