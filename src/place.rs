@@ -48,7 +48,7 @@ const COLUMNS: usize = 193;
 /// camera heights from its lantern, where the ground comes into view, and runs ahead at
 /// this many camera heights a second.
 const IMPULSE_LIFE_S: f64 = 0.45;
-const RING_START: f64 = 1.3;
+const RING_START: f64 = 1.7;
 const RING_SPEED: f64 = 13.0;
 /// An onset this strong among the song's own onsets gives an impulse at full level.
 const FULL_LEVEL_PERCENTILE: usize = 90;
