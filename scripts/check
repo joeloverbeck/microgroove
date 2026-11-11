@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# check: the whole check of the work: format, lint and tests, one line for each.
+#
+# The song is loaded from the main checkout's `.env` when there is one. With the song
+# set, a check that printed SKIPPED counts as a failure: nothing may be skipped where
+# everything can run. What each step printed is kept under the build directory.
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+if [ -z "${MICROGROOVE_SONG:-}" ] && [ -f "$main/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$main/.env"
+    set +a
+fi
+# Inside a git hook, git's own variables name this repository. The tests make
+# repositories of their own, so those variables must not reach them.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
+logs="${CARGO_TARGET_DIR:-target}/check"
+mkdir -p "$logs"
+failed=0
+step() {
+    local name=$1
+    shift
+    if "$@" >"$logs/$name.log" 2>&1; then
+        echo "ok    $name"
+    else
+        echo "FAIL  $name: the end of $logs/$name.log follows"
+        tail -n 25 "$logs/$name.log"
+        failed=1
+    fi
+}
+step fmt cargo fmt --check
+step clippy cargo clippy --all-targets -- -D warnings
+step test cargo test
+
+passed=$(awk '/^test result:/ { n += $4 } END { print n + 0 }' "$logs/test.log")
+skipped=$(grep -c '^SKIPPED' "$logs/test.log" || true)
+echo "      $passed tests passed, $skipped checks skipped"
+if [ "$skipped" -gt 0 ] && [ -n "${MICROGROOVE_SONG:-}" ]; then
+    echo "FAIL  skipped although the song is set:"
+    grep '^SKIPPED' "$logs/test.log"
+    failed=1
+fi
+size=$(find src tests \( -name '*.rs' -o -name '*.wgsl' \) -print0 | xargs -0 cat | wc -l)
+echo "      $size lines of Rust and shader source"
+exit $failed

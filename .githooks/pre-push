@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Before a push: no private term in the commits being pushed, and the check passes.
+# Turn it on once in a clone with `git config core.hooksPath .githooks`.
+set -euo pipefail
+
+remote=$1
+top=$(git rev-parse --show-toplevel)
+none=0000000000000000000000000000000000000000
+while read -r _ local_commit _ remote_commit; do
+    if [ "$local_commit" = "$none" ]; then
+        continue # a branch is being deleted: nothing is sent
+    elif [ "$remote_commit" = "$none" ]; then
+        "$top/scripts/private-scan" --commits "$local_commit" --not "--remotes=$remote"
+    else
+        "$top/scripts/private-scan" --commits "$remote_commit..$local_commit"
+    fi
+done
+"$top/scripts/check"

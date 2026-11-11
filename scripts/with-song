@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# with-song COMMAND...: run a command with the variables of the main checkout's `.env`
+# set (`MICROGROOVE_SONG` and the rest; see `.env.example`).
+#
+# `.env` is untracked, so a git worktree does not contain it. This finds the main
+# checkout from wherever it is run, so `scripts/with-song cargo test` works in both.
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+    echo "usage: with-song COMMAND..." >&2
+    exit 2
+fi
+main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+if [ ! -f "$main/.env" ]; then
+    echo "with-song: the main checkout has no .env; copy .env.example to .env and set the path" >&2
+    exit 1
+fi
+set -a
+# shellcheck disable=SC1091
+. "$main/.env"
+set +a
+exec "$@"

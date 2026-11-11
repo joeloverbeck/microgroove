@@ -46,7 +46,14 @@ set -a; . ./.env; set +a
 cargo run --release -- "$MICROGROOVE_SONG"
 ```
 
-`.env` is untracked, so a git worktree does not contain it: load it from the main checkout.
+`.env` is untracked, so a git worktree does not contain it. `scripts/with-song <command>` runs a command with the main checkout's `.env` loaded, from the main checkout or any worktree:
+
+```sh
+scripts/with-song cargo test
+scripts/with-song sh -c 'cargo run --release -- still "$MICROGROOVE_SONG" --at 1:50'
+```
+
+The second line is quoted so that the variable is filled in after `.env` is loaded.
 
 ### Silent self-launch
 
@@ -87,10 +94,18 @@ This draws every moment of the stretch at 144 a second and 3840×2160 and writes
 Check the work:
 
 ```sh
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+scripts/check
 ```
 
-The checks against the first-journey song run only where `MICROGROOVE_SONG` names that song (see `.env.example`; the program itself never reads `.env`). Without it each of them prints a `SKIPPED` line and says why.
+It runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, prints one line for each, and then the number of tests and the size of the source.
+
+The checks against the first-journey song run only where `MICROGROOVE_SONG` names that song (see `.env.example`; the program itself never reads `.env`). `scripts/check` loads the main checkout's `.env` when there is one. Without the song each of those checks prints a `SKIPPED` line and says why; with the song set, a skipped check counts as a failure.
+
+The repository is public, so `scripts/private-scan` looks for private terms in what is about to be published: see [privacy](docs/agents/privacy.md). Turn on the hook that runs it, and then `scripts/check`, before every push, once in each clone:
+
+```sh
+git config core.hooksPath .githooks
+```
 
 ## Read in this order
 

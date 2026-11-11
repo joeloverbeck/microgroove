@@ -64,6 +64,14 @@ Issues and PRs live in GitHub Issues for `joeloverbeck/microgroove`, via `gh`. S
 
 The five default triage labels, each label string the same as its role name. See `docs/agents/triage-labels.md`.
 
+### Privacy
+
+The repository is public. Before writing a commit, an issue, a PR or a comment, read `docs/agents/privacy.md`.
+
+### Checks and the song
+
+`scripts/check` is the whole check: format, lint and tests. `scripts/with-song <command>` runs a command with the song's variables set, from the main checkout or any worktree.
+
 ### Domain docs
 
 Single-context: one root `GLOSSARY.md` plus `docs/adr/`, alongside `docs/foundation/`. See `docs/agents/domain.md`.

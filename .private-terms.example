@@ -1,0 +1,8 @@
+# Copy this file to .private-terms in the main checkout. .private-terms is git-ignored.
+#
+# One term to a line. scripts/private-scan finds each as plain text, whatever its case,
+# and ignores terms shorter than four characters. Lines that start with # are comments.
+#
+# The home directory, git's email and the paths in .env are terms already. List here the
+# private names and words they do not cover. See docs/agents/privacy.md.
+a-private-name
