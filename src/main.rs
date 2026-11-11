@@ -210,7 +210,7 @@ fn timeline(request: &Request) -> Result<(), String> {
 }
 
 /// The place made from a file, on a GPU with no display, with a picture to draw it into.
-fn place(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), String> {
+fn prepare(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), String> {
     let (song, analysis) = hear(&request.song)?;
     let end_s = song.duration_s();
     let late = [request.from, request.to]
@@ -232,7 +232,7 @@ fn place(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), String
 
 /// Writes a still of each moment asked for, with its numbers.
 fn still(request: &Request) -> Result<(), String> {
-    let (_, place, gpu, renderer, picture) = place(request)?;
+    let (_, place, gpu, renderer, picture) = prepare(request)?;
     let out = request.out.clone().unwrap_or(PathBuf::from(STILLS));
     for at in &request.at {
         let moment = place.moment(*at);
@@ -253,7 +253,7 @@ fn still(request: &Request) -> Result<(), String> {
 /// Draws consecutive moments across a stretch of the song, and writes what they measure:
 /// flashes, camera reversals and the time each took to draw.
 fn run(request: &Request) -> Result<(), String> {
-    let (end_s, place, gpu, renderer, picture) = place(request)?;
+    let (end_s, place, gpu, renderer, picture) = prepare(request)?;
     let rate = request.rate.unwrap_or(DISPLAY_HZ);
     let (from_s, to_s) = (request.from.unwrap_or(0.0), request.to.unwrap_or(end_s));
     let count = ((to_s - from_s) * rate as f64).round() as usize;
