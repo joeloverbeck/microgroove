@@ -48,7 +48,7 @@ Read [the mission](docs/foundation/01-mission.md) before any project work. For a
 
 The owner alone accepts. Owner decisions in the foundations stand until the owner changes them; everything labelled a proposal is replaceable by evidence from riding.
 
-A **journey** is one audio file ridden end to end, hands off. A **viewing** is any launch the owner is asked to judge. Viewings are budgeted: get as far as still frames and measurements allow first, and say what each requested viewing decides. You cannot see motion or hear, so report stills and numbers as stills and numbers, and leave how a journey feels to the owner.
+A **journey** is one audio file ridden end to end, hands off. A **viewing** is any launch the owner judges: one the owner is asked to judge, or one the owner starts unprompted and reports a verdict on that the work then acts on. Viewings are budgeted: get as far as still frames and measurements allow first, and say what each requested viewing decides. You cannot see motion or hear, so report stills and numbers as stills and numbers, and leave how a journey feels to the owner.
 
 The world comes from the audio signal alone and is the same for the same file every time. Audio stays outside the repository.
 

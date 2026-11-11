@@ -14,7 +14,7 @@ Before owner acceptance the implementation is an experiment (`WORK-2`). Once acc
 
 ## Appetite
 
-- **12 viewings.** A viewing is any launch the owner is asked to judge, whatever its length. Accepted, rejected and inconclusive viewings all count (`EVID-8`).
+- **12 viewings.** A viewing is any launch the owner judges, whatever its length: one the owner is asked to judge, or one the owner starts unprompted and reports a verdict on that the work then acts on. Accepted, rejected and inconclusive viewings all count (`EVID-8`).
 - The default streak in `WORK-3` and the default stops in `OPS-4`.
 
 Viewings are scarce, so the agent gets as far as still frames and measurements allow before asking for one, and each request names what the viewing decides.
