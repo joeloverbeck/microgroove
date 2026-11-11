@@ -53,3 +53,17 @@ A **journey** is one audio file ridden end to end, hands off. A **viewing** is a
 The world comes from the audio signal alone and is the same for the same file every time. Audio stays outside the repository.
 
 GitHub Issues and pull requests own active work. No issue exists yet; the first one bounds the first journey.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRs live in GitHub Issues for `joeloverbeck/microgroove`, via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels, each label string the same as its role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` plus `docs/adr/`, alongside `docs/foundation/`. See `docs/agents/domain.md`.
