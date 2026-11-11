@@ -89,11 +89,13 @@ const LEAN_DB: f32 = 3.0;
 /// The forms: a rib across the floor for a low onset, standing stones beside the route
 /// for a middle one, thin masts for a high one. For each, in floor half-widths: where it
 /// stands from the middle of the route, half its width across the route, half its depth
-/// along it, and its height at level 0 and at level 1.
+/// along it, and its height at level 0 and at level 1. The nearer the route a form
+/// stands, the later it leaves the picture before the listener passes it. Its foot is
+/// sunk this many metres into the ground, which is nowhere quite level.
 const FORMS: [(f64, f64, f64, (f64, f64)); 3] = [
     (0.5, 0.5, 0.015, (0.012, 0.022)),
-    (0.9, 0.06, 0.06, (0.5, 1.0)),
-    (0.55, 0.012, 0.012, (1.6, 3.0)),
+    (0.75, 0.06, 0.06, (0.5, 1.0)),
+    (0.35, 0.012, 0.012, (1.6, 3.0)),
 ];
 const SUNK_M: f64 = 3.0;
 /// An onset this strong among the song's own onsets gives an impulse at full level.
@@ -577,7 +579,6 @@ impl Place {
                 Side::Right => &[1.0],
             };
             let ([x, z], floor) = (impulse.origin_m, impulse.floor_m);
-            // Its foot is sunk into the ground, which is nowhere quite level.
             let foot = f64::from(swell(x as f32, z as f32)) - SUNK_M;
             let height = mix(tall.0, tall.1, impulse.level) * floor + SUNK_M;
             for toward in sides {
