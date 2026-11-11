@@ -12,7 +12,9 @@ use common::{Value, f, inspect, numbers, numbers_bytes, run, scratch, series, sk
 /// MD5 of the first-journey song's audio decoded to 24-bit PCM, from issue #1.
 const FIRST_JOURNEY_MD5: &str = "9345b4152173327879c721122c3eb2ba";
 
-/// The analysis numbers of the first-journey song, or why they cannot be had here.
+/// The analysis numbers of the first-journey song, or why they cannot be had here. Where
+/// ffmpeg is installed it is ffmpeg that says which song the file is, so that a fault in
+/// the program's own decode fails these checks instead of skipping them.
 fn first_journey(check: &str) -> Option<&'static Value> {
     static HEARD: OnceLock<Result<Value, String>> = OnceLock::new();
     let heard = HEARD.get_or_init(|| {
@@ -21,12 +23,19 @@ fn first_journey(check: &str) -> Option<&'static Value> {
         if !song.is_file() {
             return Err("MICROGROOVE_SONG does not name a file".to_string());
         }
+        let other = "MICROGROOVE_SONG is not the first-journey song (its decoded audio differs)";
+        let by_ffmpeg = common::ffmpeg_md5(&song);
+        if by_ffmpeg.as_deref().is_some_and(|md5| md5 != FIRST_JOURNEY_MD5) {
+            return Err(other.to_string());
+        }
         let heard = numbers(&song, &scratch("real-song"));
         if heard["decoded_audio_md5"] != FIRST_JOURNEY_MD5 {
-            return Err(
-                "MICROGROOVE_SONG is not the first-journey song (its decoded audio differs)"
-                    .to_string(),
+            let decoded = &heard["decoded_audio_md5"];
+            assert!(
+                by_ffmpeg.is_none(),
+                "ffmpeg decodes MICROGROOVE_SONG to the first-journey song; the program decodes it to {decoded}"
             );
+            return Err(other.to_string());
         }
         Ok(heard)
     });
@@ -100,43 +109,31 @@ fn intensity_is_lowest_and_highest_where_the_song_is_and_falls_across_the_bridge
     let Some(heard) = first_journey("intensity") else {
         return;
     };
-    let hop_s = f(&heard["intensity"]["hop_s"]);
-    let values: Vec<f64> = heard["intensity"]["values"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(f)
-        .collect();
-    let stretch =
-        |from_s: f64, to_s: f64| &values[(from_s / hop_s) as usize..(to_s / hop_s) as usize];
-    let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len() as f64;
-    // The typical intensity of a stretch: its median, which the short dip that issue #1
-    // measures inside the Build does not drag down.
-    let typical = |from_s: f64, to_s: f64| {
-        let mut sorted = stretch(from_s, to_s).to_vec();
-        sorted.sort_by(f64::total_cmp);
-        sorted[sorted.len() / 2]
-    };
+    // Each stretch is summed up by its mean. The Build is taken without the dip that
+    // issue #1 measures inside it at about 2:04-2:16: the issue lists that dip as a
+    // change of its own, so "highest in the Build" does not speak of it.
+    let mean = |from_s: f64, to_s: f64| mean_intensity(heard, from_s, to_s);
+    let build = (30.0 * mean(94.0, 124.0) + 16.0 * mean(136.0, 152.0)) / 46.0;
 
     // Lowest in Verse 1 and at 3:18-3:30; highest at 3:30-3:47, at 3:51-4:03 and in the Build.
     let lowest = [
-        ("Verse 1", typical(0.0, 28.0)),
-        ("3:18-3:30", typical(198.0, 210.0)),
+        ("Verse 1", mean(0.0, 28.0)),
+        ("3:18-3:30", mean(198.0, 210.0)),
     ];
     let highest = [
-        ("3:30-3:47", typical(210.0, 227.0)),
-        ("3:51-4:03", typical(231.0, 243.0)),
-        ("Build", typical(94.0, 152.0)),
+        ("3:30-3:47", mean(210.0, 227.0)),
+        ("3:51-4:03", mean(231.0, 243.0)),
+        ("Build", build),
     ];
     // Every other stretch of the annotation. The fade to silence after 4:03 is not a passage.
     let others = [
-        ("Verse 2", typical(28.0, 57.0)),
-        ("Verse 2 continued", typical(57.0, 72.0)),
-        ("Verse 3", typical(72.0, 94.0)),
-        ("Bridge", typical(152.0, 167.0)),
-        ("Verse 4", typical(167.0, 188.0)),
-        ("Verse 5", typical(188.0, 197.0)),
-        ("3:47-3:51", typical(227.0, 231.0)),
+        ("Verse 2", mean(28.0, 57.0)),
+        ("Verse 2 continued", mean(57.0, 72.0)),
+        ("Verse 3", mean(72.0, 94.0)),
+        ("Bridge", mean(152.0, 167.0)),
+        ("Verse 4", mean(167.0, 188.0)),
+        ("Verse 5", mean(188.0, 197.0)),
+        ("3:47-3:51", mean(227.0, 231.0)),
     ];
     let report = format!("lowest {lowest:?}; highest {highest:?}; others {others:?}");
     for (_, low) in lowest {
@@ -153,11 +150,7 @@ fn intensity_is_lowest_and_highest_where_the_song_is_and_falls_across_the_bridge
     }
 
     // Falling across the Bridge (2:32-2:47): each third lower than the one before.
-    let thirds = [
-        mean(stretch(152.0, 157.0)),
-        mean(stretch(157.0, 162.0)),
-        mean(stretch(162.0, 167.0)),
-    ];
+    let thirds = [mean(152.0, 157.0), mean(157.0, 162.0), mean(162.0, 167.0)];
     assert!(
         thirds[0] > thirds[1] && thirds[1] > thirds[2],
         "intensity across the Bridge, by thirds: {thirds:?}"
@@ -187,15 +180,13 @@ fn intensity_follows_what_the_owner_hears_inside_the_verses() {
         "the lower passage reads {lower_passage} against {verse_2} in Verse 2 before it"
     );
 
-    // A build-up across 2:58-3:12: each third higher than the one before.
-    let thirds = [
-        mean_intensity(heard, 178.0, 182.67),
-        mean_intensity(heard, 182.67, 187.33),
-        mean_intensity(heard, 187.33, 192.0),
-    ];
+    // A build-up across 2:58-3:12: its last third above its first, which is all that
+    // the owner's words say of it.
+    let first = mean_intensity(heard, 178.0, 182.67);
+    let last = mean_intensity(heard, 187.33, 192.0);
     assert!(
-        thirds[0] < thirds[1] && thirds[1] < thirds[2],
-        "intensity across 2:58-3:12, by thirds: {thirds:?}"
+        first < last,
+        "intensity across 2:58-3:12: {first} in the first third, {last} in the last"
     );
 }
 

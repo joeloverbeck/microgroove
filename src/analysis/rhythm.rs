@@ -103,8 +103,14 @@ pub fn onsets_and_pulse(spectrum: &Spectrum) -> (Vec<Onset>, Pulse) {
 const SLOWEST_BPM: f64 = 60.0;
 const FASTEST_BPM: f64 = 200.0;
 const BPM_STEP: f64 = 0.1;
-/// Listeners settle on a beat near two a second. Rhythms far from it, such as one
-/// at one and a half times the beat, must repeat much better to be taken for the beat.
+/// Tuning: rates near this one are preferred, over this width, because listeners settle
+/// on a beat near two a second: a rhythm far from it, such as one at one and a half
+/// times the beat, must repeat much better to be taken for the beat. The preference
+/// decides close calls, and is right only near its centre. Without it the first-journey
+/// song reads 66 BPM, half its beat. With it, in review, synthetic beats of 100 to 132
+/// under a rhythm one and a half times as fast were read rightly; beats of 70, 80 and
+/// 90 were read as that rhythm; beats of 150 and 160 as three quarters of themselves;
+/// and a beat of 70 by itself as 140. Each misreading was trusted.
 const PREFERRED_BPM: f64 = 120.0;
 const PREFERENCE_WIDTH_OCTAVES: f64 = 0.5;
 /// A beat is checked at this many successive beats ahead.

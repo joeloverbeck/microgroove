@@ -109,7 +109,6 @@ fn a_steady_tone_gives_a_place_with_no_impulses_and_no_region_change() {
     for (_, moment) in stills(&song, &dir.join("out"), &["1", "7", "13", "19"], true) {
         assert_eq!(moment["place"]["regions"], 1, "one region: {moment}");
         assert_eq!(moment["place"]["impulses"], 0, "no impulses: {moment}");
-        assert_eq!(moment["place"]["pulse_shown"], false, "no pulse: {moment}");
         assert_eq!(moment["region"], 0, "{moment}");
         assert_eq!(moment["impulses"].as_array().unwrap().len(), 0, "{moment}");
     }

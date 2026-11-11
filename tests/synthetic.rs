@@ -66,16 +66,17 @@ fn a_click_sequence_gives_its_onset_times_and_its_pulse_rate() {
 fn a_rhythm_at_one_and_a_half_times_the_beat_is_not_taken_for_the_pulse() {
     let dir = scratch("synthetic-one-and-a-half");
     let song = dir.join("one-and-a-half.wav");
-    // The beat: 120 clicks a minute for the whole 40 s. On top of it, twice as loud,
-    // 180 clicks a minute for two stretches: 60% of the song, as a song might carry
-    // such a rhythm through some of its sections.
-    let beat = common::every(0.25, 0.5, 39.9);
-    let mut rhythm = common::every(0.25, 1.0 / 3.0, 14.0);
-    rhythm.extend(common::every(22.25, 1.0 / 3.0, 32.0));
+    // The beat: 100 clicks a minute for the whole 40 s. On top of it, twice as loud,
+    // 150 clicks a minute for two stretches: 60% of the song, as a song might carry
+    // such a rhythm through some of its sections. Neither rate is the one the pulse
+    // estimate prefers.
+    let beat = common::every(0.25, 0.6, 39.9);
+    let mut rhythm = common::every(0.25, 0.4, 14.0);
+    rhythm.extend(common::every(22.45, 0.4, 32.0));
     song_with_clicks(&song, 40.0, &[(&beat, 0.4), (&rhythm, 0.8)]);
 
     let heard = numbers(&song, &dir);
-    assert_close(f(&heard["pulse"]["bpm"]), 120.0, 120.0 * 0.02, "pulse rate");
+    assert_close(f(&heard["pulse"]["bpm"]), 100.0, 100.0 * 0.02, "pulse rate");
     assert!(
         !trusted(&heard["pulse"]).is_empty(),
         "the beat is trusted somewhere"

@@ -154,14 +154,13 @@ pub struct ImpulseInPlay {
     pub reach_m: f64,
 }
 
-/// A summary of the place, written beside each still.
+/// A summary of the place, written beside each still. No pulse is in it because none
+/// is shown: analysis gives its rate but not where its beats fall.
 #[derive(Serialize)]
 pub struct Summary {
     pub route_length_m: f64,
     pub regions: usize,
     pub impulses: usize,
-    /// The pulse is not shown: analysis gives its rate but not where its beats fall.
-    pub pulse_shown: bool,
 }
 
 fn mix(a: f64, b: f64, share: f64) -> f64 {
@@ -300,7 +299,6 @@ impl Place {
             route_length_m: self.distance_at(self.duration_s),
             regions: self.regions.len(),
             impulses: self.impulses.len(),
-            pulse_shown: false,
         }
     }
 

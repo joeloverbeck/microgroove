@@ -94,6 +94,38 @@ pub fn numbers(song: &Path, out: &Path) -> Value {
     serde_json::from_slice(&numbers_bytes(song, out)).unwrap()
 }
 
+/// Runs ffmpeg on a file and returns what it printed and what it reported, or None
+/// where ffmpeg is not installed.
+pub fn ffmpeg(args: &[&str], input: &Path, tail: &[&str]) -> Option<(String, String)> {
+    let output = Command::new("ffmpeg")
+        .args(args)
+        .arg("-i")
+        .arg(input)
+        .args(tail)
+        .output()
+        .ok()?;
+    assert!(
+        output.status.success(),
+        "ffmpeg failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some((
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
+/// ffmpeg's checksum of the audio decoded to 24-bit PCM, or None where ffmpeg is not
+/// installed: a file's identity, by a decoder that is not the program's.
+pub fn ffmpeg_md5(song: &Path) -> Option<String> {
+    let (stdout, _) = ffmpeg(
+        &["-v", "error"],
+        song,
+        &["-map", "0:a", "-c:a", "pcm_s24le", "-f", "md5", "-"],
+    )?;
+    Some(stdout.trim().trim_start_matches("MD5=").to_string())
+}
+
 /// Says plainly that a check did not run. Written straight to stderr so the
 /// test harness does not swallow it: a skipped check must never look passed.
 pub fn skip(check: &str, reason: &str) {

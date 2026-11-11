@@ -4,36 +4,7 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-use common::{f, numbers, scratch, skip};
-
-fn ffmpeg(args: &[&str], input: &Path, tail: &[&str]) -> Option<(String, String)> {
-    let output = Command::new("ffmpeg")
-        .args(args)
-        .arg("-i")
-        .arg(input)
-        .args(tail)
-        .output()
-        .ok()?;
-    assert!(
-        output.status.success(),
-        "ffmpeg failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Some((
-        String::from_utf8(output.stdout).unwrap(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    ))
-}
-
-/// ffmpeg's checksum of the audio decoded to 24-bit PCM, or None where ffmpeg is not installed.
-fn ffmpeg_md5(song: &Path) -> Option<String> {
-    let (stdout, _) = ffmpeg(
-        &["-v", "error"],
-        song,
-        &["-map", "0:a", "-c:a", "pcm_s24le", "-f", "md5", "-"],
-    )?;
-    Some(stdout.trim().trim_start_matches("MD5=").to_string())
-}
+use common::{f, ffmpeg, ffmpeg_md5, numbers, scratch, skip};
 
 /// Forty seconds at four levels, different in each channel. The levels stay within
 /// 20 LU of each other so that no stretch sits on the edge of the R128 gates.
@@ -67,6 +38,21 @@ fn decoded_audio_matches_ffmpegs_decode() {
     let flac = dir.join("varied.flac");
     ffmpeg(&["-v", "error", "-y"], &wav, &[flac.to_str().unwrap()]).unwrap();
     assert_eq!(numbers(&flac, &dir)["decoded_audio_md5"], expected.as_str());
+
+    // The third format read, Ogg Vorbis, does not keep the samples exactly. What must
+    // come back is every frame of the song.
+    let mut encoders = Command::new("ffmpeg");
+    let encoders = encoders.arg("-encoders").output().unwrap().stdout;
+    if !String::from_utf8_lossy(&encoders).contains(" libvorbis ") {
+        return skip(
+            "an Ogg Vorbis file decodes to the song's length",
+            "this ffmpeg has no Vorbis encoder (libvorbis)",
+        );
+    }
+    let ogg = dir.join("varied.ogg");
+    let vorbis = ["-c:a", "libvorbis", ogg.to_str().unwrap()];
+    ffmpeg(&["-v", "error", "-y"], &wav, &vorbis).unwrap();
+    assert_eq!(numbers(&ogg, &dir)["frames"], 40 * 48_000);
 }
 
 #[test]
