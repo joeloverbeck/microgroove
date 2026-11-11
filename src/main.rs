@@ -23,9 +23,9 @@ use render::{Gpu, Renderer, Size, Still};
 const USAGE: &str = "usage: microgroove [ride] <audio file> [--size <width>x<height>] [--out <directory>]
        microgroove self-launch <audio file> [--from <song time>] [--size <width>x<height>] [--out <directory>]
        microgroove timeline <audio file> [--out <directory>]
-       microgroove still <audio file> --at <song time> [--at <song time> ...] [--size <width>x<height>] [--out <directory>]
-       microgroove run <audio file> [--from <song time>] [--to <song time>] [--rate <moments a second>] [--size <width>x<height>] [--out <directory>]
-a song time is seconds (95.5) or minutes and seconds (1:35.5)";
+       microgroove still <audio file> --at <song time> [--at <song time> ...] [--dial <steps>] [--size <width>x<height>] [--out <directory>]
+       microgroove run <audio file> [--from <song time>] [--to <song time>] [--rate <moments a second>] [--dial <steps>] [--size <width>x<height>] [--out <directory>]
+a song time is seconds (95.5) or minutes and seconds (1:35.5); the dial takes steps from -8 to 8";
 
 /// Where output goes unless `--out` says otherwise: under the current directory, and
 /// git-ignored anywhere in this repository.
@@ -46,8 +46,12 @@ const COMMANDS: [(&str, Command, &[&str]); 5] = [
     ("ride", ride, &["--size", "--out"]),
     ("self-launch", self_launch, &["--size", "--from", "--out"]),
     ("timeline", timeline, &["--out"]),
-    ("still", still, &["--out", "--size", "--at"]),
-    ("run", run, &["--out", "--size", "--from", "--to", "--rate"]),
+    ("still", still, &["--out", "--size", "--at", "--dial"]),
+    (
+        "run",
+        run,
+        &["--out", "--size", "--from", "--to", "--rate", "--dial"],
+    ),
 ];
 
 /// What the command line asks for.
@@ -60,6 +64,8 @@ struct Request {
     to: Option<f64>,
     rate: Option<usize>,
     size: Option<Size>,
+    /// The dial a journey's keys turn, for a still or a run to be seen as a journey was.
+    dial: Option<i32>,
 }
 
 /// The analysis numbers as written beside the timeline.
@@ -95,6 +101,9 @@ struct Series {
     pitch_deg: Vec<f32>,
     bank_deg: Vec<f32>,
     light: Vec<f32>,
+    speed_m_s: Vec<f64>,
+    over_ground_per_s: Vec<f64>,
+    past_land_per_s: Vec<f64>,
     /// Impulses in play.
     impulses: Vec<usize>,
     /// Mean relative luminance of the whole picture.
@@ -148,6 +157,11 @@ fn parse(args: Vec<OsString>, options: &[&str]) -> Option<Request> {
                 .rate
                 .replace(text?.parse().ok().filter(|rate| *rate > 0)?)
                 .is_none(),
+            "--dial" => {
+                let steps = text?.parse().ok();
+                let steps = steps.filter(|steps: &i32| steps.abs() <= place::DIAL_MOST);
+                request.dial.replace(steps?).is_none()
+            }
             _ => request.size.replace(size(text?)?).is_none(),
         };
         if !once {
@@ -274,7 +288,8 @@ fn journey(request: &Request, silent: bool) -> Result<(), String> {
     let from_s = request.from.unwrap_or(0.0);
     let ridden = journey::ride(song, &place, size, from_s, silent)?;
     // Said before anything that can fail.
-    println!("nudge at exit: {:+} ms", ridden.nudge_ms);
+    let (nudge_ms, dial) = (ridden.nudge_ms, ridden.dial);
+    println!("nudge at exit: {nudge_ms:+} ms; dial at exit: {dial:+}");
     let name = if silent { "self-launch" } else { "journey" };
     let record = || -> Result<(), String> {
         let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));
@@ -317,7 +332,7 @@ fn still(request: &Request) -> Result<(), String> {
     let (place, gpu, renderer, picture) = prepare(request)?;
     let out = request.out.clone().unwrap_or(PathBuf::from(STILLS));
     for at in &request.at {
-        let moment = place.moment(*at);
+        let moment = place.moment(*at, request.dial.unwrap_or(0));
         gpu.draw(&renderer, &picture.view, &moment)?;
         let numbers = StillNumbers {
             moment: &moment,
@@ -348,7 +363,8 @@ fn run(request: &Request) -> Result<(), String> {
     let mut tiles = vec![Vec::new(); comfort::TILES.0 * comfort::TILES.1];
     let mut draw_ms = Vec::with_capacity(count);
     for index in 0..count {
-        let moment = place.moment(from_s + index as f64 / rate as f64);
+        let at = from_s + index as f64 / rate as f64;
+        let moment = place.moment(at, request.dial.unwrap_or(0));
         draw_ms.push(gpu.draw(&renderer, &picture.view, &moment)?.as_secs_f64() * 1000.0);
         let luminance = picture.read(&gpu, |rows, stride| {
             comfort::luminance(rows, stride, picture.size)
@@ -365,6 +381,9 @@ fn run(request: &Request) -> Result<(), String> {
         series.pitch_deg.push(moment.camera.pitch_deg as f32);
         series.bank_deg.push(moment.camera.bank_deg as f32);
         series.light.push(moment.light as f32);
+        series.speed_m_s.push(moment.speed_m_s);
+        series.over_ground_per_s.push(moment.over_ground_per_s);
+        series.past_land_per_s.push(moment.past_land_per_s);
         series.impulses.push(moment.impulses.len());
     }
 
@@ -395,6 +414,10 @@ fn run(request: &Request) -> Result<(), String> {
                 comfort::widest_range_in_a_second(&series.luminance, rate),
         },
         "camera": { "worst_reversals_in_any_second": poses.iter().map(reversals).max() },
+        "passing": {
+            "over_ground_per_s": spread(series.over_ground_per_s.clone()),
+            "past_land_per_s": spread(series.past_land_per_s.clone()),
+        },
         "draw_ms": spread(draw_ms),
         "series": series,
     });
@@ -402,8 +425,8 @@ fn run(request: &Request) -> Result<(), String> {
     let name = format!("run-{from_s:08.3}-{to_s:08.3}.json");
     write(&out, &name, json(&numbers, false)?)?;
     println!(
-        "{count} moments at {rate} a second: flashes {}, camera {}, draw_ms {}",
-        numbers["flashes"], numbers["camera"], numbers["draw_ms"]
+        "{count} moments at {rate} a second: flashes {}, camera {}, passing {}, draw_ms {}",
+        numbers["flashes"], numbers["camera"], numbers["passing"], numbers["draw_ms"]
     );
     Ok(())
 }

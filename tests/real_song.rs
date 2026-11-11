@@ -276,22 +276,67 @@ fn the_flac_and_the_wav_give_identical_stills() {
     }
 }
 
+/// A run of the whole first-journey song at 50 moments a second, for the checks on its motion.
+fn whole_run(check: &str) -> Option<&'static Value> {
+    static RUN: OnceLock<Value> = OnceLock::new();
+    let song = first_journey_song(check)?;
+    let options = ["--rate", "50", "--size", "320x180"];
+    Some(RUN.get_or_init(|| run(&song, &scratch("real-motion"), &options)))
+}
+
 #[test]
 fn position_on_the_route_never_runs_backwards_across_the_whole_song() {
-    let Some(song) = first_journey_song("route") else {
+    let Some(whole) = whole_run("route") else {
         return;
     };
-    let whole = run(
-        &song,
-        &scratch("real-route"),
-        &["--rate", "20", "--size", "320x180"],
-    );
-    let position = series(&whole, "route_position_m");
-    assert_eq!(position.len(), (246.18f64 * 20.0).round() as usize);
+    let position = series(whole, "route_position_m");
+    assert_eq!(position.len(), (246.18f64 * 50.0).round() as usize);
     assert!(
         position.windows(2).all(|pair| pair[1] > pair[0]),
         "position on the route moves forward as song time advances"
     );
+}
+
+/// Issue #6, over the passages issue #1 names as the quietest and the loudest: the ground
+/// passes at least three times as fast in the loud ones, and the land beside no slower.
+#[test]
+fn the_ground_passes_three_times_as_fast_in_the_loudest_passages_as_in_the_quietest() {
+    let Some(whole) = whole_run("passing") else {
+        return;
+    };
+    let mean = |rate: &str, (from_s, to_s): (usize, usize)| {
+        let stretch = &series(whole, rate)[from_s * 50..to_s * 50];
+        stretch.iter().sum::<f64>() / stretch.len() as f64
+    };
+    for quiet in [(0, 28), (198, 210)] {
+        for loud in [(94, 124), (136, 152), (210, 227), (231, 243)] {
+            let ground = [quiet, loud].map(|passage| mean("over_ground_per_s", passage));
+            let land = [quiet, loud].map(|passage| mean("past_land_per_s", passage));
+            assert!(
+                ground[1] >= 3.0 * ground[0] && land[1] >= land[0],
+                "{quiet:?} then {loud:?}: over the ground {ground:?}, past the land {land:?}"
+            );
+        }
+    }
+}
+
+/// Issue #6, through each turn of the song: the lean peaks within 0.25 s of the view's
+/// fastest turning, levels out at most 1.3 times as fast as it leaned in, and stays within 18°.
+#[test]
+fn through_every_turn_the_camera_leans_as_its_view_turns_and_levels_out_gently() {
+    let Some(whole) = whole_run("turns") else {
+        return;
+    };
+    let heard = first_journey("turns").expect("heard for the run");
+    for boundary in common::times(&heard["boundaries"]) {
+        let (after_s, out_over_in, most_deg) = common::turn(whole, boundary);
+        assert!(
+            after_s.abs() <= 0.25 && out_over_in <= 1.3 && (1.0..=18.0).contains(&most_deg),
+            "the turn at {}: the lean peaks {after_s} s after the view turns fastest, levels \
+             out {out_over_in} times as fast as it leaned in, and reaches {most_deg} degrees",
+            clock(boundary)
+        );
+    }
 }
 
 /// Comfort across the most intense stretches named in issue #1: the Build, 3:30-3:47 and

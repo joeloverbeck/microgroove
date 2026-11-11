@@ -9,6 +9,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde_json::{Value, json};
 
 use crate::decode::Song;
+use crate::place::DIAL_MOST;
 
 /// The audio device playing the song, and the clock it keeps.
 pub struct Playback {
@@ -145,6 +146,9 @@ impl Playback {
 pub struct Clock {
     /// Shifts the picture against the audio: the moment shown is this far ahead of what is heard.
     pub nudge_ms: i32,
+    /// The dial the moment shown is seen with: steps up, where the ground passes faster,
+    /// or down. An aid like the nudge; it shifts nothing in time.
+    pub dial: i32,
     /// While set, the device is handed no frames, so sound and picture stop together.
     pub paused: bool,
     /// Each time the steady line through the device's sayings was laid afresh: the song
@@ -184,6 +188,7 @@ impl Clock {
     pub fn new(rate: u32, frames: usize, from: usize) -> Clock {
         Clock {
             nudge_ms: 0,
+            dial: 0,
             paused: false,
             laid: Vec::new(),
             passed_over: Vec::new(),
@@ -242,6 +247,11 @@ impl Clock {
     /// The song time of the moment to show: what is being heard, shifted by the nudge.
     pub fn shown_s(&mut self, now_ns: u64) -> f64 {
         self.heard_s(now_ns) + f64::from(self.nudge_ms) / 1e3
+    }
+
+    /// Turns the dial by a press of one of its keys. It stops at its ends.
+    pub fn turn(&mut self, press: i32) {
+        self.dial = (self.dial + press).clamp(-DIAL_MOST, DIAL_MOST);
     }
 
     /// Whether the last frame of the song has been heard.
@@ -361,6 +371,21 @@ mod tests {
         device.clock.nudge_ms = -20;
         let (heard, shown) = device.after(1.0);
         assert!(close(heard, 1.96) && close(shown, 1.94), "{heard} {shown}");
+    }
+
+    #[test]
+    fn the_dial_turns_a_step_at_a_press_as_far_as_eight_either_way_and_shifts_no_song_time() {
+        let mut device = Device::playing(Clock::new(48_000, 480_000, 0));
+        let undialled = device.after(1.0);
+        for press in [1, 1, -1] {
+            device.clock.turn(press);
+        }
+        assert_eq!(device.clock.dial, 1, "two presses up and one down");
+        assert_eq!(device.after(0.0), undialled, "what is heard and shown");
+        for (press, end) in [(1, 8), (-1, -8)] {
+            (0..20).for_each(|_| device.clock.turn(press));
+            assert_eq!(device.clock.dial, end, "the dial stops at its end");
+        }
     }
 
     #[test]

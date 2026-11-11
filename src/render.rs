@@ -382,7 +382,7 @@ impl Renderer {
         uniforms.extend(right.map(|part| part * half.0));
         uniforms.push(shown.len() as f64);
         uniforms.extend(up.map(|part| part * half.1));
-        uniforms.push(0.0);
+        uniforms.push(1.0 / moment.nearer);
         uniforms.extend(forward);
         uniforms.push(0.0);
         let mut uniforms: Vec<f32> = uniforms.iter().map(|value| *value as f32).collect();
@@ -394,9 +394,7 @@ impl Renderer {
         }
         uniforms.extend(colours);
         for impulse in shown {
-            let across = impulse.origin_m[0] - origin[0];
-            let along = impulse.origin_m[1] - origin[1];
-            uniforms.extend([across, along, impulse.reach_m, impulse.level].map(|v| v as f32));
+            uniforms.extend([eye[0], eye[2], impulse.reach_m, impulse.level].map(|v| v as f32));
         }
         uniforms.resize(UNIFORM_FLOATS, 0.0);
         uniforms

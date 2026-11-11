@@ -9,29 +9,37 @@
 
 use serde::Serialize;
 
-use crate::analysis::{Analysis, smooth};
+use crate::analysis::{Analysis, Section, smooth};
 
 /// Speed along the route at intensity 0 and at intensity 1, in metres per second of song.
-const SPEED: (f64, f64) = (32.0, 150.0);
-/// Height of the camera above the floor of the route at the same two intensities.
-const ALTITUDE: (f64, f64) = (10.0, 70.0);
+/// Between them each equal step of intensity multiplies it alike.
+const SPEED: (f64, f64) = (44.0, 300.0);
+/// Height of the camera above the floor of the route at the same two intensities. It
+/// rises far less than speed does, so that the ground passes faster where the song pushes.
+const ALTITUDE: (f64, f64) = (10.0, 14.0);
 /// The camera rises and sinks with intensity as it is over about this many seconds.
 const DRIVE_SMOOTH_S: f64 = 3.0;
-/// The camera looks at where it will be this many seconds on, lowered by this share of its height.
+/// Each step of the dial brings the camera this much nearer the ground, so that the
+/// ground passes that much faster. The dial goes this many steps either way.
+const DIAL_STEP: f64 = 1.1;
+pub const DIAL_MOST: i32 = 8;
+/// The camera looks at where it will be this many seconds on, lowered by this share of
+/// its height, and along the heading the route has half that long on.
 const LOOK_AHEAD_S: f64 = 1.5;
 const LOOK_DOWN: f64 = 0.35;
-/// At a boundary trusted in full the route turns by this slope, and the listener spends
-/// this long in the turn.
+/// At a boundary trusted in full the route turns by this slope, over this long a stretch
+/// of the song, whatever the speed does meanwhile.
 const TURN: f64 = 0.38;
 const TURN_S: f64 = 4.0;
-/// The camera banks into a turn: up to this angle, reaching most of it at this sideways pull.
-const BANK_MAX_DEG: f64 = 26.0;
-const BANK_PULL: f64 = 30.0;
+/// The camera leans as its view turns: never as far as this angle, and most of the way
+/// to it when the view turns this many degrees a second.
+const BANK_MAX_DEG: f64 = 18.0;
+const BANK_TURNING_DEG_S: f64 = 16.0;
 /// A region takes over from the one before across this length, centred on the boundary.
 const BLEND_M: f64 = 120.0;
-/// Half the width of the floor the route runs along, and the height the land beside it
-/// rises to, at intensity 0 and at intensity 1.
-const FLOOR_M: (f64, f64) = (25.0, 200.0);
+/// Half the width of the floor the route runs along, which widens as speed does but
+/// less, and the height the land beside it rises to, at intensity 0 and at intensity 1.
+const FLOOR_M: (f64, f64) = (25.0, 80.0);
 const RELIEF_M: (f64, f64) = (45.0, 650.0);
 /// The land climbs from the floor to its full height across this length.
 const RISE_M: f64 = 450.0;
@@ -45,11 +53,11 @@ const BEYOND_M: f64 = 7000.0;
 const HALF_WIDTH_M: f64 = 4200.0;
 const COLUMNS: usize = 193;
 /// An impulse is in play for this long after its onset. Its ring of light starts this many
-/// camera heights from its lantern, where the ground comes into view, and runs ahead at
-/// this many camera heights a second.
+/// camera heights from the point under the camera, where the ground comes into view, and
+/// runs on from there at this many camera heights a second.
 const IMPULSE_LIFE_S: f64 = 0.45;
 const RING_START: f64 = 1.7;
-const RING_SPEED: f64 = 13.0;
+const RING_SPEED: f64 = 10.0;
 /// An onset this strong among the song's own onsets gives an impulse at full level.
 const FULL_LEVEL_PERCENTILE: usize = 90;
 /// A section fuller than this makes rounded land; the thinner its sound, the sharper its land.
@@ -67,12 +75,14 @@ pub struct Place {
     intensity: Vec<f32>,
     /// Intensity as the camera follows it.
     drive: Vec<f32>,
-    /// Distance along the route, and speed, at the start of each step of the intensity curve.
+    /// A faster pulse travels faster: every speed is multiplied by this.
+    pace: f64,
+    /// Where the route turns: the song time of the middle of the turn, and the change of slope.
+    turns: Vec<(f64, f64)>,
+    /// Distance along the route, and the route's sideways offset, at the start of each
+    /// step of the intensity curve.
     distance: Vec<f64>,
-    speed: Vec<f64>,
-    /// Where the route turns: the distance of the middle of the turn, the change of
-    /// slope, and the length of the turn.
-    turns: Vec<(f64, f64, f64)>,
+    across: Vec<f64>,
     regions: Vec<Region>,
     impulses: Vec<Impulse>,
     pub sky: Sky,
@@ -88,7 +98,7 @@ struct Region {
 }
 
 /// The place's answer to one onset: a lantern on the route where the onset sounds, and
-/// a ring of light that runs out from it once it has sounded.
+/// a ring of light that runs out from under the camera once it has sounded.
 struct Impulse {
     onset_s: f64,
     origin_m: [f64; 2],
@@ -128,6 +138,15 @@ pub struct Moment {
     pub camera: Camera,
     /// From 0 to 1: how much light the song gives the place now.
     pub light: f64,
+    /// Speed along the route, in metres per second of song.
+    pub speed_m_s: f64,
+    /// How fast what is near passes the camera, in times a second: speed over its height
+    /// above the ground under it, and over the distance to where the land beside begins.
+    pub over_ground_per_s: f64,
+    pub past_land_per_s: f64,
+    /// How many times nearer the ground the dial has brought the camera, and with it
+    /// the lanterns and rings, which are sized to its height: 1 with the dial at rest.
+    pub nearer: f64,
     /// The accent colour of the land around the listener, which tints the air.
     pub accent: [f32; 3],
     /// The impulses in play, oldest first.
@@ -149,8 +168,7 @@ pub struct ImpulseInPlay {
     pub age_s: f64,
     /// From 1 at a strong onset as it sounds down to 0 as the impulse dies away.
     pub level: f64,
-    /// Where its lantern stands (across, along), and how far its ring has run from there.
-    pub origin_m: [f64; 2],
+    /// How far its ring has run from the point under the camera.
     pub reach_m: f64,
 }
 
@@ -165,6 +183,21 @@ pub struct Summary {
 
 fn mix(a: f64, b: f64, share: f64) -> f64 {
     a + (b - a) * share
+}
+
+/// From the first of two to the second, each equal step of the share multiplying alike.
+fn scale((from, to): (f64, f64), share: f64) -> f64 {
+    from * (to / from).powf(share)
+}
+
+/// What a rate comes to between two song times, taken at four points: exact for
+/// anything that runs as smoothly as a turn does within one step of the curves.
+fn sum(from_s: f64, to_s: f64, rate: impl Fn(f64) -> f64) -> f64 {
+    let half = (to_s - from_s) / 2.0;
+    let at = |point: f64| rate(from_s + half * (1.0 + point));
+    let (inner, outer) = (0.339_981_043_584_856, 0.861_136_311_594_053);
+    half * (0.652_145_154_862_546 * (at(-inner) + at(inner))
+        + 0.347_854_845_137_454 * (at(-outer) + at(outer)))
 }
 
 /// 0 below 0, 1 above 1, and a smooth climb between with no corner at either end.
@@ -212,30 +245,16 @@ impl Place {
         let drive = smooth(&intensity, (DRIVE_SMOOTH_S / hop_s).round() as usize);
         let fingerprint = &analysis.fingerprint;
 
-        // A faster pulse travels faster. With no trusted pulse the pace is neutral.
-        let pace = (fingerprint.tempo_bpm.unwrap_or(120.0) / 120.0).clamp(0.6, 1.6);
-        let speed: Vec<f64> = (0..=intensity.len())
-            .map(|step| {
-                pace * mix(
-                    SPEED.0,
-                    SPEED.1,
-                    read(&intensity, hop_s, step as f64 * hop_s),
-                )
-            })
-            .collect();
-        let mut distance = vec![0.0; speed.len()];
-        for step in 1..speed.len() {
-            distance[step] = distance[step - 1] + (speed[step - 1] + speed[step]) / 2.0 * hop_s;
-        }
-
         let mut place = Place {
             duration_s: analysis.duration_s,
             hop_s,
             intensity,
             drive,
-            distance,
-            speed,
+            // With no trusted pulse the pace is neutral.
+            pace: (fingerprint.tempo_bpm.unwrap_or(120.0) / 120.0).clamp(0.6, 1.6),
             turns: Vec::new(),
+            distance: vec![0.0],
+            across: vec![0.0],
             regions: Vec::new(),
             impulses: Vec::new(),
             sky: Sky {
@@ -247,29 +266,34 @@ impl Place {
             },
         };
 
-        // A region for each section. The route turns into each region, one way and then
-        // the other, by as much as the boundary is trusted.
+        // The route turns into each region, one way and then the other, by as much as
+        // the boundary is trusted.
         let mut heading = 0.0;
-        for (index, section) in analysis.sections.iter().enumerate() {
-            let (start_m, speed) = place.travel(section.start_s);
-            if index > 0 {
-                let confidence = analysis.boundaries[index - 1].confidence;
-                let side = if index % 2 == 1 { 1.0 } else { -1.0 };
-                let turn = side * TURN * confidence - heading;
-                place.turns.push((start_m, turn, TURN_S * speed));
-                heading += turn;
-            }
-            place.regions.push(Region {
-                start_s: section.start_s,
-                start_m,
-                accent: colour(
-                    hue(section.brightness),
-                    mix(0.55, 1.0, section.fullness),
-                    1.0,
-                ),
-                sharpness: ((SHARP_BELOW - section.fullness) / 0.5).clamp(0.0, 1.0) as f32,
-            });
+        for (index, boundary) in analysis.boundaries.iter().enumerate() {
+            let side = if index % 2 == 0 { 1.0 } else { -1.0 };
+            let turn = side * TURN * boundary.confidence - heading;
+            place.turns.push((boundary.time_s, turn));
+            heading += turn;
         }
+        // The route is laid out step by step, each from where the one before ended.
+        for step in 1..=place.intensity.len() {
+            let to_s = step as f64 * hop_s;
+            let (along, across) = (place.distance_at(to_s), place.across(to_s));
+            place.distance.push(along);
+            place.across.push(across);
+        }
+        // A region for each section.
+        let region = |section: &Section| Region {
+            start_s: section.start_s,
+            start_m: place.distance_at(section.start_s),
+            accent: colour(
+                hue(section.brightness),
+                mix(0.55, 1.0, section.fullness),
+                1.0,
+            ),
+            sharpness: ((SHARP_BELOW - section.fullness) / 0.5).clamp(0.0, 1.0) as f32,
+        };
+        place.regions = analysis.sections.iter().map(region).collect();
 
         let mut strengths: Vec<f32> = analysis.onsets.iter().map(|onset| onset.strength).collect();
         strengths.sort_by(f32::total_cmp);
@@ -279,14 +303,11 @@ impl Place {
         place.impulses = analysis
             .onsets
             .iter()
-            .map(|onset| {
-                let along = place.distance_at(onset.time_s);
-                Impulse {
-                    onset_s: onset.time_s,
-                    origin_m: [place.bend(along).0, along],
-                    level: (f64::from(onset.strength) / full).min(1.0),
-                    altitude_m: place.altitude(onset.time_s),
-                }
+            .map(|onset| Impulse {
+                onset_s: onset.time_s,
+                origin_m: [place.across(onset.time_s), place.distance_at(onset.time_s)],
+                level: (f64::from(onset.strength) / full).min(1.0),
+                altitude_m: place.altitude(onset.time_s),
             })
             .collect();
         place
@@ -300,27 +321,27 @@ impl Place {
         }
     }
 
-    /// Distance along the route at a song time, and the speed there. Speed runs straight
-    /// from each step of the intensity curve to the next, so distance has no corners.
-    fn travel(&self, time_s: f64) -> (f64, f64) {
-        let last = self.speed.len() - 1;
-        let step = ((time_s / self.hop_s).max(0.0) as usize).min(last);
-        let into = time_s - step as f64 * self.hop_s;
-        if step == last || time_s < 0.0 {
-            return (
-                self.distance[step] + self.speed[step] * into,
-                self.speed[step],
-            );
-        }
-        let gain = (self.speed[step + 1] - self.speed[step]) / self.hop_s;
-        (
-            self.distance[step] + (self.speed[step] + gain * into / 2.0) * into,
-            self.speed[step] + gain * into,
-        )
+    /// Speed along the route at a song time: the song's intensity then, and nothing else.
+    fn speed(&self, time_s: f64) -> f64 {
+        self.pace * scale(SPEED, read(&self.intensity, self.hop_s, time_s))
     }
 
+    /// The last step of the intensity curve laid out by a song time, and when it starts.
+    fn step(&self, time_s: f64) -> (usize, f64) {
+        let step = ((time_s / self.hop_s).max(0.0) as usize).min(self.distance.len() - 1);
+        (step, step as f64 * self.hop_s)
+    }
+
+    /// Distance along the route at a song time: the speed, summed from the step before.
     fn distance_at(&self, time_s: f64) -> f64 {
-        self.travel(time_s).0
+        let (step, from_s) = self.step(time_s);
+        self.distance[step] + sum(from_s, time_s, |at| self.speed(at))
+    }
+
+    /// The route's sideways offset at a song time: its slope over the distance travelled.
+    fn across(&self, time_s: f64) -> f64 {
+        let (step, from_s) = self.step(time_s);
+        self.across[step] + sum(from_s, time_s, |at| self.heading(at).0 * self.speed(at))
     }
 
     /// The song time at which the listener is a given distance along the route.
@@ -333,27 +354,22 @@ impl Place {
             - 1;
         let span = (self.distance[(step + 1).min(last)] - self.distance[step]).max(1e-9);
         if route_m < 0.0 || route_m > self.distance[last] {
-            let from = if route_m < 0.0 { 0 } else { last };
-            return from as f64 * self.hop_s + (route_m - self.distance[from]) / self.speed[from];
+            let from_s = if route_m < 0.0 { 0.0 } else { self.duration_s };
+            return from_s + (route_m - self.distance_at(from_s)) / self.speed(from_s);
         }
         (step as f64 + (route_m - self.distance[step]) / span) * self.hop_s
     }
 
-    /// The route's sideways offset and curvature at a distance along it.
-    fn bend(&self, route_m: f64) -> (f64, f64) {
-        let (mut offset, mut curvature) = (0.0, 0.0);
-        for (middle, turn, length) in &self.turns {
-            let u = ((route_m - middle) / length + 0.5).max(0.0);
-            if u >= 1.0 {
-                offset += turn * (route_m - middle);
-            } else {
-                // The route's slope eases in; its integral and its derivative are exact.
-                let u4 = u * u * u * u;
-                offset += turn * length * u4 * (u * u - 3.0 * u + 2.5);
-                curvature += turn * 30.0 * u * u * (1.0 - u) * (1.0 - u) / length;
-            }
+    /// The route's sideways slope at a song time, and how fast that slope is changing.
+    /// Each turn eases it over the same stretch of song, as gently out as in.
+    fn heading(&self, time_s: f64) -> (f64, f64) {
+        let (mut slope, mut changing) = (0.0, 0.0);
+        for (middle_s, turn) in &self.turns {
+            let u = ((time_s - middle_s) / TURN_S + 0.5).clamp(0.0, 1.0);
+            slope += turn * ease(u);
+            changing += turn * 30.0 * u * u * (1.0 - u) * (1.0 - u) / TURN_S;
         }
-        (offset, curvature)
+        (slope, changing)
     }
 
     /// Height of the camera above the floor at a song time.
@@ -362,22 +378,27 @@ impl Place {
         mix(ALTITUDE.0, ALTITUDE.1, drive)
     }
 
-    /// Where the camera is at a song time.
-    fn flight(&self, time_s: f64) -> [f64; 3] {
-        let along = self.distance_at(time_s);
-        [self.bend(along).0, self.altitude(time_s), along]
+    /// Where the camera is at a song time, the dial having brought it `nearer` the ground.
+    fn flight(&self, time_s: f64, nearer: f64) -> [f64; 3] {
+        [
+            self.across(time_s),
+            self.altitude(time_s) / nearer,
+            self.distance_at(time_s),
+        ]
     }
 
-    pub fn moment(&self, song_time_s: f64) -> Moment {
+    /// The place at a song time, seen with the dial so many steps up or down.
+    pub fn moment(&self, song_time_s: f64, dial: i32) -> Moment {
         let time_s = song_time_s.clamp(0.0, self.duration_s);
-        let (eye, ahead) = (self.flight(time_s), self.flight(time_s + LOOK_AHEAD_S));
-        let (along, speed) = self.travel(time_s);
-        let toward = [
-            ahead[0] - eye[0],
-            ahead[1] - eye[1] - LOOK_DOWN * eye[1],
-            ahead[2] - eye[2],
-        ];
-        let pull = speed * speed * self.bend(along).1;
+        let nearer = DIAL_STEP.powi(dial.clamp(-DIAL_MOST, DIAL_MOST));
+        let eye = self.flight(time_s, nearer);
+        let ahead = self.flight(time_s + LOOK_AHEAD_S, nearer);
+        let (along, speed) = (eye[2], self.speed(time_s));
+        let sink = ahead[1] - eye[1] - LOOK_DOWN * eye[1];
+        // The view turns as the route's heading does, and the camera leans as the view turns.
+        let (slope, changing) = self.heading(time_s + LOOK_AHEAD_S / 2.0);
+        let turning_deg_s = (changing / (1.0 + slope * slope)).to_degrees();
+        let light = read(&self.intensity, self.hop_s, time_s);
         let first = self
             .impulses
             .partition_point(|i| i.onset_s <= time_s - IMPULSE_LIFE_S);
@@ -388,11 +409,17 @@ impl Place {
             region: self.regions.partition_point(|r| r.start_s <= time_s).max(1) - 1,
             camera: Camera {
                 position_m: eye,
-                yaw_deg: toward[0].atan2(toward[2]).to_degrees(),
-                pitch_deg: toward[1].atan2(toward[0].hypot(toward[2])).to_degrees(),
-                bank_deg: BANK_MAX_DEG * (pull / BANK_PULL).tanh(),
+                yaw_deg: slope.atan().to_degrees(),
+                pitch_deg: sink
+                    .atan2((ahead[0] - eye[0]).hypot(ahead[2] - eye[2]))
+                    .to_degrees(),
+                bank_deg: BANK_MAX_DEG * (turning_deg_s / BANK_TURNING_DEG_S).tanh(),
             },
-            light: read(&self.intensity, self.hop_s, time_s),
+            light,
+            speed_m_s: speed,
+            over_ground_per_s: speed / (eye[1] - f64::from(swell(eye[0] as f32, along as f32))),
+            past_land_per_s: speed / scale(FLOOR_M, light),
+            nearer,
             accent: self.character(along).0,
             impulses: self.impulses[first..end]
                 .iter()
@@ -402,8 +429,7 @@ impl Place {
                         onset_s: impulse.onset_s,
                         age_s,
                         level: impulse.level * (1.0 - age_s / IMPULSE_LIFE_S).powi(2),
-                        origin_m: impulse.origin_m,
-                        reach_m: impulse.altitude_m * (RING_START + RING_SPEED * age_s),
+                        reach_m: impulse.altitude_m / nearer * (RING_START + RING_SPEED * age_s),
                     }
                 })
                 .collect(),
@@ -456,11 +482,12 @@ impl Place {
         let mut paint = Vec::with_capacity(rows);
         for row in 0..rows {
             let along = row as f64 * ROW_M - BEHIND_M;
-            let intensity = read(&self.intensity, self.hop_s, self.time_at(along));
+            let time_s = self.time_at(along);
+            let intensity = read(&self.intensity, self.hop_s, time_s);
             let (accent, sharpness) = self.character(along);
-            let centre = self.bend(along).0;
+            let centre = self.across(time_s);
             let (floor, relief) = (
-                mix(FLOOR_M.0, FLOOR_M.1, intensity),
+                scale(FLOOR_M, intensity),
                 mix(RELIEF_M.0, RELIEF_M.1, intensity),
             );
             for column in 0..COLUMNS {

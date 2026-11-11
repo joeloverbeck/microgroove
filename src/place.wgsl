@@ -7,13 +7,13 @@ struct Moment {
     origin: vec4<f32>,   // xyz: a point near the camera that every position is taken from. w: light, 0 to 1.
     eye: vec4<f32>,      // xyz: the camera, from the origin. w: haze per metre.
     right: vec4<f32>,    // xyz: camera right, scaled by half the width of the view. w: impulses in play.
-    up: vec4<f32>,       // xyz: camera up, scaled by half the height of the view.
+    up: vec4<f32>,       // xyz: camera up, scaled by half the height of the view. w: the size the dial leaves lanterns and rings, of their own.
     forward: vec4<f32>,
     zenith: vec4<f32>,
     horizon: vec4<f32>,
     sun: vec4<f32>,
     sun_toward: vec4<f32>,
-    rings: array<vec4<f32>, 12>, // xy: the impulse's lantern, from the origin (across, along). z: reach. w: level.
+    rings: array<vec4<f32>, 12>, // xy: the point under the camera, from the origin (across, along). z: reach. w: level.
 }
 
 @group(0) @binding(0) var<uniform> moment: Moment;
@@ -146,10 +146,10 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
         * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - wet);
     colour += accent * in.paint.a * in.paint.a * GLOW * (0.04 + seam + 0.5 * vein);
 
-    // Each impulse in play is a ring of light running out over the ground from its lantern.
+    // Each impulse in play is a ring of light running out over the ground from under the camera.
     for (var i = 0; i < i32(moment.right.w); i++) {
         let ring = moment.rings[i];
-        let off = (distance(in.point.xz, ring.xy) - ring.z) / (0.03 * ring.z + 0.5);
+        let off = (distance(in.point.xz, ring.xy) - ring.z) / (0.03 * ring.z + 0.5 * moment.up.w);
         colour += mix(accent, vec3<f32>(1.0), 0.5) * ring.w * RING * exp(-off * off);
     }
 
@@ -168,8 +168,9 @@ struct LanternOut {
 fn lantern_vertex(
     @builtin(vertex_index) index: u32,
     @location(0) lantern: vec4<f32>, // xyz: where it stands. w: level.
-    @location(1) radius: f32,
+    @location(1) its_radius: f32,
 ) -> LanternOut {
+    let radius = its_radius * moment.up.w;
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),

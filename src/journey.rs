@@ -25,11 +25,14 @@ const NUDGE_MS: i32 = 0;
 /// One press of a nudge key shifts the picture against the audio by this much.
 const NUDGE_STEP_MS: i32 = 5;
 /// The keys a silent self-launch presses for itself, and when, in seconds after it
-/// starts to open: both nudge keys, pause, resume and quit.
-const SCRIPT: [(f64, KeyCode); 6] = [
+/// starts to open: both nudge keys, both dial keys, pause, resume and quit.
+const SCRIPT: [(f64, KeyCode); 9] = [
     (1.5, KeyCode::ArrowRight),
     (2.0, KeyCode::ArrowRight),
     (2.5, KeyCode::ArrowLeft),
+    (3.0, KeyCode::ArrowUp),
+    (3.5, KeyCode::ArrowUp),
+    (4.0, KeyCode::ArrowDown),
     (5.0, KeyCode::Space),
     (6.0, KeyCode::Space),
     (10.5, KeyCode::Escape),
@@ -44,8 +47,10 @@ const TICK: Duration = Duration::from_millis(20);
 
 /// What a journey leaves behind.
 pub struct Ridden {
-    /// The nudge in use at the end, to be made the default if the listener settled on it.
+    /// The nudge in use at the end, to be made the default if the listener settled on it,
+    /// and the dial, to retune the camera's height by.
     pub nudge_ms: i32,
+    pub dial: i32,
     /// What the journey measured of itself.
     pub measured: Value,
     /// The last picture a silent self-launch showed, and its moment: a still to set
@@ -209,6 +214,8 @@ impl Journey<'_> {
             KeyCode::Space => clock.paused = !clock.paused,
             KeyCode::ArrowLeft => clock.nudge_ms -= NUDGE_STEP_MS,
             KeyCode::ArrowRight => clock.nudge_ms += NUDGE_STEP_MS,
+            KeyCode::ArrowUp => clock.turn(1),
+            KeyCode::ArrowDown => clock.turn(-1),
             _ => return,
         }
         self.log.pressed.push(json!({
@@ -216,6 +223,7 @@ impl Journey<'_> {
             "key": format!("{key:?}"),
             "paused": clock.paused,
             "nudge_ms": clock.nudge_ms,
+            "dial": clock.dial,
         }));
     }
 
@@ -235,7 +243,8 @@ impl Journey<'_> {
         };
         let began = Instant::now();
         let (heard_s, shown_s, _) = stage.playback.now();
-        let moment = self.place.moment(shown_s);
+        let dial = stage.playback.shared().clock.dial;
+        let moment = self.place.moment(shown_s, dial);
         // Telling the window first is what has the desktop ask for the next picture
         // when it has shown this one: one picture for each refresh of the display.
         let about_to_show = || stage.window.pre_present_notify();
@@ -265,6 +274,7 @@ impl Journey<'_> {
         };
         let (_, _, ended) = stage.playback.now();
         let nudge_ms = stage.playback.shared().clock.nudge_ms;
+        let dial = stage.playback.shared().clock.dial;
         let pictures = &self.log.pictures;
         // Pacing is the time up to each picture the desktop asked for: one drawn unasked
         // was drawn at the tick, not at the display's pace.
@@ -290,6 +300,7 @@ impl Journey<'_> {
             "from_s": self.from_s,
             "ended": if ended { "the song ended" } else { "a key quit" },
             "nudge_ms": nudge_ms,
+            "dial": dial,
             "opening": self.log.opening,
             "window": {
                 "size": [size.width, size.height],
@@ -319,6 +330,7 @@ impl Journey<'_> {
         });
         Ridden {
             nudge_ms,
+            dial,
             measured,
             last,
             adapter: stage.gpu.adapter.clone(),

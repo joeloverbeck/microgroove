@@ -68,6 +68,29 @@ pub fn series(run: &Value, name: &str) -> Vec<f64> {
     curve(&run["series"][name])
 }
 
+/// The turn a run makes within three seconds of a song time: how long after the view's
+/// fastest turning the lean peaks, the fastest levelling-out over the fastest leaning-in,
+/// and the greatest lean in degrees.
+pub fn turn(run: &Value, around_s: f64) -> (f64, f64, f64) {
+    let per_second = num(&run["moments_per_second"]);
+    let (time, yaw) = (series(run, "song_time_s"), series(run, "yaw_deg"));
+    let lean: Vec<f64> = series(run, "bank_deg").iter().map(|l| l.abs()).collect();
+    let within = (1..time.len() - 1).filter(|at| (time[*at] - around_s).abs() <= 3.0);
+    let within: Vec<usize> = within.collect();
+    let change = |of: &[f64], at: usize| (of[at + 1] - of[at - 1]) * per_second / 2.0;
+    let peak = |of: &dyn Fn(usize) -> f64| {
+        let greater = |a: &usize, b: &usize| of(*a).total_cmp(&of(*b));
+        within.iter().copied().max_by(greater).unwrap()
+    };
+    let (turning, leaning) = (peak(&|at| change(&yaw, at).abs()), peak(&|at| lean[at]));
+    let fastest = |way: f64| {
+        let changes = within.iter().map(|at| way * change(&lean, *at));
+        changes.fold(0.0, f64::max)
+    };
+    let after_s = time[leaning] - time[turning];
+    (after_s, fastest(-1.0) / fastest(1.0), lean[leaning])
+}
+
 /// Quiet noise, then loud noise with clicks, then quiet noise again: 24 s.
 pub fn rising_and_falling_song(path: &Path) {
     let mut signal = noise(8.0, 0.02);

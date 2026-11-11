@@ -98,6 +98,31 @@ fn the_same_moment_gives_the_same_still_on_every_run_and_in_whatever_order() {
     );
 }
 
+/// Each step of the dial is a tenth: up, the camera rides that much nearer the ground.
+#[test]
+fn the_dial_makes_the_ground_pass_faster_or_slower_and_leaves_the_place_as_it_is() {
+    let dir = scratch("still-dial");
+    let song = dir.join("song.wav");
+    rising_and_falling_song(&song);
+    let at = |dial: &str| {
+        let options = ["--at", "12", "--size", "320x180", "--dial", dial];
+        json(&inspect("still", &song, &dir.join(dial), &options)[1])
+    };
+    let (slower, tuned, faster) = (at("-1"), at("0"), at("2"));
+    let height = |moment: &Value| num(&moment["camera"]["position_m"][1]);
+    let passing = |moment: &Value| num(&moment["over_ground_per_s"]);
+    assert!(
+        (height(&tuned) / height(&faster) - 1.21).abs() < 1e-9
+            && (height(&slower) / height(&tuned) - 1.1).abs() < 1e-9,
+        "camera heights: {slower}, {tuned}, {faster}"
+    );
+    assert!(passing(&slower) < passing(&tuned) && passing(&tuned) < passing(&faster));
+    for dialled in [&slower, &faster] {
+        assert_eq!(dialled["route_position_m"], tuned["route_position_m"]);
+        assert_eq!(dialled["past_land_per_s"], tuned["past_land_per_s"]);
+    }
+}
+
 /// The valid no-match outcome: nothing is heard, so the place shows nothing for it.
 #[test]
 fn a_steady_tone_gives_a_place_with_no_impulses_and_no_region_change() {
