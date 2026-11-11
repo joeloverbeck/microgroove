@@ -86,12 +86,7 @@ fn the_camera_leans_as_its_view_turns_and_levels_out_as_gently_as_it_leaned_in()
         &dir.join("out"),
         &["--rate", "50", "--size", "320x180"],
     );
-    let (lean_after_view_s, out_over_in, most_deg) = common::turn(&run, 10.0);
-    assert!(
-        lean_after_view_s.abs() <= 0.25 && out_over_in <= 1.3 && (1.0..=18.0).contains(&most_deg),
-        "the lean peaks {lean_after_view_s} s after the view turns fastest, levels out \
-         {out_over_in} times as fast as it leaned in, and reaches {most_deg} degrees"
-    );
+    common::assert_the_camera_leans_as_its_view_turns(&run, 10.0);
 }
 
 #[test]

@@ -49,13 +49,35 @@ pub fn inspect(command: &str, song: &Path, out: &Path, options: &[&str]) -> Vec<
     files.map(PathBuf::from).collect()
 }
 
-/// The numbers of a small still at each song time, in the order asked.
-pub fn moments(song: &Path, out: &Path, times: &[&str]) -> Vec<Value> {
+/// Makes a still of each song time in one command. Returns each still and its numbers,
+/// in the order asked. Small stills are enough where only the numbers are judged.
+pub fn stills(song: &Path, out: &Path, times: &[&str], small: bool) -> Vec<(Vec<u8>, Value)> {
     let mut options: Vec<&str> = times.iter().flat_map(|time| ["--at", time]).collect();
-    options.extend(["--size", "320x180"]);
+    if small {
+        options.extend(["--size", "320x180"]);
+    }
     let written = inspect("still", song, out, &options);
     assert_eq!(written.len(), 2 * times.len(), "{written:?}");
-    written.chunks(2).map(|pair| json(&pair[1])).collect()
+    let still = |pair: &[PathBuf]| (std::fs::read(&pair[0]).unwrap(), json(&pair[1]));
+    written.chunks(2).map(still).collect()
+}
+
+/// The numbers of a small still at each song time, in the order asked.
+pub fn moments(song: &Path, out: &Path, times: &[&str]) -> Vec<Value> {
+    let stills = stills(song, out, times, true);
+    stills.into_iter().map(|(_, numbers)| numbers).collect()
+}
+
+/// Checks the turn a run makes at a song time: the lean peaks within 0.25 s of the view's
+/// fastest turning, levels out at most 1.3 times as fast as it leaned in, and reaches
+/// between 1 and 18 degrees.
+pub fn assert_the_camera_leans_as_its_view_turns(run: &Value, around_s: f64) {
+    let (after_s, out_over_in, most_deg) = turn(run, around_s);
+    assert!(
+        after_s.abs() <= 0.25 && out_over_in <= 1.3 && (1.0..=18.0).contains(&most_deg),
+        "the turn at {around_s} s: the lean peaks {after_s} s after the view turns fastest, \
+         levels out {out_over_in} times as fast as it leaned in, and reaches {most_deg} degrees"
+    );
 }
 
 pub fn json(file: &Path) -> Value {
@@ -80,7 +102,7 @@ pub fn series(run: &Value, name: &str) -> Vec<f64> {
 /// The turn a run makes within three seconds of a song time: how long after the view's
 /// fastest turning the lean peaks, the fastest levelling-out over the fastest leaning-in,
 /// and the greatest lean in degrees.
-pub fn turn(run: &Value, around_s: f64) -> (f64, f64, f64) {
+fn turn(run: &Value, around_s: f64) -> (f64, f64, f64) {
     let per_second = num(&run["moments_per_second"]);
     let (time, yaw) = (series(run, "song_time_s"), series(run, "yaw_deg"));
     let lean: Vec<f64> = series(run, "bank_deg").iter().map(|l| l.abs()).collect();

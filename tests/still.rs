@@ -2,22 +2,9 @@
 //! Stills are compared with each other and by their numbers, never with a stored picture.
 mod common;
 
-use std::path::Path;
-
-use common::{Value, inspect, json, num, rising_and_falling_song, scratch, write_wav};
-
-/// Makes a still of each song time in one command. Returns each still and its numbers,
-/// in the order asked. Small stills are enough where only the numbers are judged.
-fn stills(song: &Path, out: &Path, times: &[&str], small: bool) -> Vec<(Vec<u8>, Value)> {
-    let mut options: Vec<&str> = times.iter().flat_map(|time| ["--at", time]).collect();
-    if small {
-        options.extend(["--size", "320x180"]);
-    }
-    let written = inspect("still", song, out, &options);
-    assert_eq!(written.len(), 2 * times.len(), "{written:?}");
-    let still = |pair: &[std::path::PathBuf]| (std::fs::read(&pair[0]).unwrap(), json(&pair[1]));
-    written.chunks(2).map(still).collect()
-}
+use common::{
+    Value, inspect, json, moments, num, rising_and_falling_song, scratch, stills, write_wav,
+};
 
 #[test]
 fn one_command_writes_a_still_and_the_numbers_of_its_moment_with_no_display() {
@@ -149,7 +136,7 @@ fn a_steady_tone_gives_a_place_with_no_impulses_and_no_region_change() {
     let signal = common::tone(20.0, 220.0, 0.5);
     write_wav(&song, &signal, &signal);
 
-    for (_, moment) in stills(&song, &dir.join("out"), &["1", "7", "13", "19"], true) {
+    for moment in moments(&song, &dir.join("out"), &["1", "7", "13", "19"]) {
         assert_eq!(moment["place"]["regions"], 1, "one region: {moment}");
         assert_eq!(moment["place"]["impulses"], 0, "no impulses: {moment}");
         assert_eq!(moment["region"], 0, "{moment}");
@@ -165,13 +152,10 @@ fn the_region_changes_at_a_trusted_boundary_and_only_there() {
     signal.extend(common::noise(13.0, 0.3));
     write_wav(&song, &signal, &signal);
 
-    let moments = stills(&song, &dir.join("out"), &["4", "8.5", "9.5", "20"], true);
-    let regions: Vec<&Value> = moments
-        .iter()
-        .map(|(_, moment)| &moment["region"])
-        .collect();
+    let moments = moments(&song, &dir.join("out"), &["4", "8.5", "9.5", "20"]);
+    let regions: Vec<&Value> = moments.iter().map(|moment| &moment["region"]).collect();
     assert_eq!(regions, [0, 0, 1, 1], "the noise starts at 9 s");
-    assert_eq!(moments[0].1["place"]["regions"], 2);
+    assert_eq!(moments[0]["place"]["regions"], 2);
 }
 
 #[test]
@@ -182,15 +166,10 @@ fn an_impulse_is_in_play_from_its_onset_and_dies_away_with_the_time_since() {
     common::add_clicks(&mut signal, &[2.0, 5.0], 0.8);
     write_wav(&song, &signal, &signal);
 
-    let moments = stills(
-        &song,
-        &dir.join("out"),
-        &["1.95", "2.05", "2.25", "3"],
-        true,
-    );
-    let impulses = |index: usize| moments[index].1["impulses"].as_array().unwrap();
+    let moments = moments(&song, &dir.join("out"), &["1.95", "2.05", "2.25", "3"]);
+    let impulses = |index: usize| moments[index]["impulses"].as_array().unwrap();
     assert_eq!(
-        moments[0].1["place"]["impulses"], 2,
+        moments[0]["place"]["impulses"], 2,
         "one impulse for each click"
     );
     assert!(

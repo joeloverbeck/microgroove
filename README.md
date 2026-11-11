@@ -4,7 +4,7 @@ Give it a song; it carries you through a place made from that song.
 
 `microgroove` is a personal Rust program. It analyses a whole local audio file before playing it, then flies the listener, hands off, through a dream landscape whose geography is the song's structure and whose future lies visibly ahead. Under magnification a record's groove is a canyon whose two walls are the left and right channels; the name takes that literally.
 
-**Status (2026-11-11):** an experiment in progress on the `first-journey` branch. The program decodes one audio file, analyses it, builds a place from the analysis, and rides it: full screen, with the song playing. It also writes a timeline of what it heard and a still of any moment of the place. The journey has not yet been seen on a display, by the owner or by a measurement, and the owner has accepted nothing.
+**Status (2026-11-11):** an experiment in progress on the `first-journey` branch. The program decodes one audio file, analyses it, builds a place from the analysis, and rides it: full screen, with the song playing. It also writes a timeline of what it heard and a still of any moment of the place. The owner has ridden it on a display once, in viewing 1, and has accepted nothing.
 
 ## Build
 
@@ -31,7 +31,7 @@ The program analyses the whole file, then opens a borderless full-screen window 
 | Up arrow | turns the dial up a step: the camera rides a tenth nearer the ground, so the ground passes faster |
 | Down arrow | turns the dial down a step: the camera rides a tenth higher, so the ground passes slower |
 
-The nudge and the dial are aids for this experiment. The dial goes eight steps either way and changes only the camera's height: the place, the speed along the route and the land beside it stay as they are.
+The nudge and the dial are aids for this experiment. The dial goes eight steps either way. It changes the camera's height, and with it the size of the lanterns, which are sized to that height: the place, the speed along the route and the land beside it stay as they are. Forms are stood for the dial at rest, so with it turned a rib leaves the picture a little before or after its onset sounds.
 
 As it ends, a journey prints the nudge and the dial in use (`nudge at exit: +10 ms; dial at exit: +2`) and then writes what it measured of itself to `captures/journey.json`: the time between pictures, how steadily song time ran, the keys pressed with their times, and anything the audio device reported. If that file cannot be written the journey says so and still ends well. `--size <width>x<height>` draws the picture smaller than the display and scales it up; `--out <directory>` writes the measurements somewhere else.
 

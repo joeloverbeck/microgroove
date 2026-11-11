@@ -276,22 +276,22 @@ impl Journey<'_> {
         let nudge_ms = stage.playback.shared().clock.nudge_ms;
         let dial = stage.playback.shared().clock.dial;
         let pictures = &self.log.pictures;
-        // Pacing is the time up to each picture the desktop asked for: one drawn unasked
-        // was drawn at the tick, not at the display's pace.
-        let between_ms = pictures
-            .windows(2)
-            .filter(|pair| pair[1].4)
-            .map(|pair| (pair[1].0 - pair[0].0) * 1e3);
-        let between_ms: Vec<f64> = between_ms.collect();
+        // Pacing is the time up to each picture the desktop asked for, with when that
+        // picture was begun: one drawn unasked was drawn at the tick, not at the display's pace.
+        let asked = pictures.windows(2).filter(|pair| pair[1].4);
+        let asked = asked.map(|pair| (pair[1].0, (pair[1].0 - pair[0].0) * 1e3));
+        let asked: Vec<(f64, f64)> = asked.collect();
+        let between_ms: Vec<f64> = asked.iter().map(|(_, after_ms)| *after_ms).collect();
         // A picture is late when more than a refresh and a half passed since the last.
         // Where each late one fell tells a slow start from a stutter in the riding.
         let refresh = stage.window.current_monitor();
         let refresh = refresh.and_then(|display| display.refresh_rate_millihertz());
         let refresh_ms = refresh.map(|millihertz| 1e6 / f64::from(millihertz));
         let late_at_s = refresh_ms.map(|refresh_ms| {
-            let asked = pictures.windows(2).filter(|pair| pair[1].4);
-            let late = asked.filter(|pair| (pair[1].0 - pair[0].0) * 1e3 > 1.5 * refresh_ms);
-            late.map(|pair| pair[1].0).collect::<Vec<f64>>()
+            let late = asked
+                .iter()
+                .filter(|(_, after_ms)| *after_ms > 1.5 * refresh_ms);
+            late.map(|(at_s, _)| *at_s).collect::<Vec<f64>>()
         });
         let size = stage.window.inner_size();
         let measured = json!({

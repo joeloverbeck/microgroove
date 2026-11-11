@@ -190,6 +190,10 @@ fn intensity_follows_what_the_owner_hears_inside_the_verses() {
     );
 }
 
+/// The passages issue #1 names as the quietest and as the loudest, in seconds of the song.
+const QUIETEST: [(usize, usize); 2] = [(0, 28), (198, 210)];
+const LOUDEST: [(usize, usize); 4] = [(94, 124), (136, 152), (210, 227), (231, 243)];
+
 /// Issue #7: the onsets that stand out, each of which the place makes a form of, come to
 /// between 0.7 and 2.5 a second over the song, and to fewer in the passages issue #1
 /// names as the quietest than in those it names as the loudest. All the onsets together
@@ -206,14 +210,8 @@ fn fewer_onsets_stand_out_where_the_song_is_quiet_than_where_it_is_loud() {
         let within = times.iter().filter(|time| (from_s..to_s).contains(*time));
         within.count() as f64 / (to_s - from_s)
     };
-    let quiet = [(0.0, 28.0), (198.0, 210.0)].map(rate);
-    let loud = [
-        (94.0, 124.0),
-        (136.0, 152.0),
-        (210.0, 227.0),
-        (231.0, 243.0),
-    ]
-    .map(rate);
+    let through = |(from_s, to_s): (usize, usize)| rate((from_s as f64, to_s as f64));
+    let (quiet, loud) = (QUIETEST.map(through), LOUDEST.map(through));
     let by_twenty: Vec<f64> = (0..12)
         .map(|n| 20.0 * rate((n as f64 * 20.0, n as f64 * 20.0 + 20.0)))
         .collect();
@@ -368,8 +366,8 @@ fn the_ground_passes_three_times_as_fast_in_the_loudest_passages_as_in_the_quiet
         let stretch = &series(whole, rate)[from_s * 50..to_s * 50];
         stretch.iter().sum::<f64>() / stretch.len() as f64
     };
-    for quiet in [(0, 28), (198, 210)] {
-        for loud in [(94, 124), (136, 152), (210, 227), (231, 243)] {
+    for quiet in QUIETEST {
+        for loud in LOUDEST {
             let ground = [quiet, loud].map(|passage| mean("over_ground_per_s", passage));
             let land = [quiet, loud].map(|passage| mean("past_land_per_s", passage));
             assert!(
@@ -395,20 +393,16 @@ fn through_every_turn_the_camera_leans_as_its_view_turns_and_levels_out_gently()
     };
     let heard = first_journey("turns").expect("heard for the run");
     for boundary in common::times(&heard["boundaries"]) {
-        let (after_s, out_over_in, most_deg) = common::turn(whole, boundary);
-        assert!(
-            after_s.abs() <= 0.25 && out_over_in <= 1.3 && (1.0..=18.0).contains(&most_deg),
-            "the turn at {}: the lean peaks {after_s} s after the view turns fastest, levels \
-             out {out_over_in} times as fast as it leaned in, and reaches {most_deg} degrees",
-            clock(boundary)
-        );
+        common::assert_the_camera_leans_as_its_view_turns(whole, boundary);
     }
 }
 
 /// Comfort across the most intense stretches named in issue #1: the Build, 3:30-3:47 and
-/// 3:51-4:03, as consecutive moments at the display's 144 a second. Fewer than three
-/// full-screen flashes in any one second, and a camera that does not shake: no part of
-/// its pose turns back on itself more than twice in any one second.
+/// 3:51-4:03, as consecutive moments at the display's 144 a second. No full-screen flash
+/// in any one second, and a camera that does not shake: no part of its pose turns back on
+/// itself more than twice in any one second. And no flash across any boundary (issue #8):
+/// no second of the whole song, at 50 moments a second, holds the change of 0.10 in the
+/// picture's light that a flash is made of twice over.
 #[test]
 fn the_most_intense_stretches_stay_within_the_comfort_limits() {
     let Some(song) = first_journey_song("comfort") else {
@@ -421,15 +415,15 @@ fn the_most_intense_stretches_stay_within_the_comfort_limits() {
             &["--from", from, "--to", to, "--size", "960x540"],
         );
         assert_eq!(stretch["moments_per_second"], 144);
-        assert!(
-            num(&stretch["flashes"]["worst_in_any_second"]) < 3.0,
-            "full-screen flashes over {from}-{to}: {}",
-            stretch["flashes"]
-        );
+        let flashes = &stretch["flashes"];
+        assert_eq!(flashes["worst_in_any_second"], 0, "{from}-{to}: {flashes}");
         assert!(
             num(&stretch["camera"]["worst_reversals_in_any_second"]) <= 2.0,
             "camera reversals over {from}-{to}: {}",
             stretch["camera"]
         );
     }
+    let whole = &whole_run("comfort").expect("the song is here")["flashes"];
+    let widest = num(&whole["widest_luminance_range_in_any_second"]);
+    assert!(widest < 0.10, "the light changes by {widest} in a second");
 }

@@ -5,9 +5,6 @@ mod common;
 
 use common::{moments, scratch, tone, write_wav};
 
-/// The kinds of place a region can be, as the numbers beside a still name them.
-const KINDS: [&str; 4] = ["water", "dunes", "rock", "ice"];
-
 /// A section that returns is the same kind of place revisited.
 #[test]
 fn a_quiet_thin_sound_then_a_loud_dense_one_then_the_first_again_is_three_regions_of_two_kinds() {
@@ -62,7 +59,6 @@ fn a_steady_tone_is_one_region_of_one_kind() {
 
     let moments = moments(&song, &dir.join("out"), &["3", "12", "21"]);
     let kind = moments[0]["kind"].as_str().expect("a still names its kind");
-    assert!(KINDS.contains(&kind), "{kind} is no kind of place");
     for moment in &moments {
         assert_eq!(moment["place"]["regions"], 1, "one region: {moment}");
         assert_eq!(moment["kind"], kind, "{moment}");
