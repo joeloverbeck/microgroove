@@ -32,6 +32,8 @@ const DISPLAY_HZ: usize = 144;
 /// a hundredth of a metre, or two hundredths of a degree (under a pixel of the display).
 const LEAST_REVERSAL: (f32, f32) = (0.01, 0.02);
 
+type Command = fn(&Request) -> Result<(), String>;
+
 /// What the command line asks for.
 #[derive(Default)]
 struct Request {
@@ -126,7 +128,7 @@ struct Series {
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let command = args.next().and_then(|command| command.into_string().ok());
-    let (act, options): (fn(&Request) -> Result<(), String>, &[&str]) = match command.as_deref() {
+    let (act, options): (Command, &[&str]) = match command.as_deref() {
         Some("timeline") => (timeline, &["--out"]),
         Some("still") => (still, &["--out", "--size", "--at"]),
         Some("run") => (run, &["--out", "--size", "--from", "--to", "--rate"]),

@@ -53,6 +53,22 @@ pub fn json(file: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
 }
 
+/// Draws a run of consecutive moments and returns its numbers.
+pub fn run(song: &Path, out: &Path, options: &[&str]) -> Value {
+    let written = inspect("run", song, out, options);
+    let [numbers] = written.as_slice() else {
+        panic!("the command names the numbers of the run: {written:?}");
+    };
+    json(numbers)
+}
+
+/// One value for each moment of a run.
+pub fn series(run: &Value, name: &str) -> Vec<f64> {
+    let values = run["series"][name].as_array();
+    let values = values.unwrap_or_else(|| panic!("no series {name}"));
+    values.iter().map(f).collect()
+}
+
 /// Quiet noise, then loud noise with clicks, then quiet noise again: 24 s.
 pub fn rising_and_falling_song(path: &Path) {
     let mut signal = noise(8.0, 0.02);

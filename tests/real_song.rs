@@ -7,7 +7,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use common::{Value, f, numbers, numbers_bytes, scratch, skip};
+use common::{Value, f, inspect, numbers, numbers_bytes, run, scratch, series, skip};
 
 /// MD5 of the first-journey song's audio decoded to 24-bit PCM, from issue #1.
 const FIRST_JOURNEY_MD5: &str = "9345b4152173327879c721122c3eb2ba";
@@ -256,4 +256,86 @@ fn the_flac_and_the_wav_give_identical_numbers() {
             == std::fs::read(from_wav.join("timeline.png")).unwrap(),
         "timelines differ"
     );
+}
+
+/// The first-journey song's file, for the checks on the place made from it.
+fn first_journey_song(check: &str) -> Option<PathBuf> {
+    first_journey(check)?;
+    std::env::var_os("MICROGROOVE_SONG").map(PathBuf::from)
+}
+
+#[test]
+fn the_flac_and_the_wav_give_identical_stills() {
+    let check = "stills from flac and wav";
+    let Some(song) = first_journey_song(check) else {
+        return;
+    };
+    let Some(wav) = std::env::var_os("MICROGROOVE_SONG_WAV")
+        .map(PathBuf::from)
+        .filter(|wav| wav.is_file())
+    else {
+        return skip(
+            check,
+            "MICROGROOVE_SONG_WAV is not set to the WAV of the same master",
+        );
+    };
+    // A quiet moment, a loud one, and one a tenth of a second after the surge at 3:31.9.
+    let moments = ["--at", "0:10", "--at", "1:50", "--at", "3:32"];
+    let from_song = inspect("still", &song, &scratch("real-stills-flac"), &moments);
+    let from_wav = inspect("still", &wav, &scratch("real-stills-wav"), &moments);
+    assert_eq!((from_song.len(), from_wav.len()), (6, 6));
+    for (of_song, of_wav) in from_song.iter().zip(&from_wav) {
+        assert!(
+            std::fs::read(of_song).unwrap() == std::fs::read(of_wav).unwrap(),
+            "{:?} differs between the FLAC and the WAV",
+            of_song.file_name().unwrap()
+        );
+    }
+}
+
+#[test]
+fn position_on_the_route_never_runs_backwards_across_the_whole_song() {
+    let Some(song) = first_journey_song("route") else {
+        return;
+    };
+    let whole = run(
+        &song,
+        &scratch("real-route"),
+        &["--rate", "20", "--size", "320x180"],
+    );
+    let position = series(&whole, "route_position_m");
+    assert_eq!(position.len(), (246.18f64 * 20.0).round() as usize);
+    assert!(
+        position.windows(2).all(|pair| pair[1] > pair[0]),
+        "position on the route moves forward as song time advances"
+    );
+}
+
+/// Comfort across the most intense stretches named in issue #1: the Build, 3:30-3:47 and
+/// 3:51-4:03, as consecutive moments at the display's 144 a second. Fewer than three
+/// full-screen flashes in any one second, and a camera that does not shake: no part of
+/// its pose turns back on itself more than twice in any one second.
+#[test]
+fn the_most_intense_stretches_stay_within_the_comfort_limits() {
+    let Some(song) = first_journey_song("comfort") else {
+        return;
+    };
+    for (from, to) in [("1:34", "2:32"), ("3:30", "3:47"), ("3:51", "4:03")] {
+        let stretch = run(
+            &song,
+            &scratch("real-comfort"),
+            &["--from", from, "--to", to, "--size", "960x540"],
+        );
+        assert_eq!(stretch["moments_per_second"], 144);
+        assert!(
+            f(&stretch["flashes"]["worst_in_any_second"]) < 3.0,
+            "full-screen flashes over {from}-{to}: {}",
+            stretch["flashes"]
+        );
+        assert!(
+            f(&stretch["camera"]["worst_reversals_in_any_second"]) <= 2.0,
+            "camera reversals over {from}-{to}: {}",
+            stretch["camera"]
+        );
+    }
 }

@@ -51,9 +51,13 @@ const RING_START: f64 = 1.3;
 const RING_SPEED: f64 = 13.0;
 /// An onset this strong among the song's own onsets gives an impulse at full level.
 const FULL_LEVEL_PERCENTILE: usize = 90;
+/// A section fuller than this makes rounded land; the thinner its sound, the sharper its land.
+const SHARP_BELOW: f64 = 0.8;
 
 /// Floats per ground vertex: position, normal, accent colour, glow.
 pub const VERTEX_FLOATS: usize = 10;
+/// Floats per lantern: position, level, radius.
+pub const LANTERN_FLOATS: usize = 5;
 
 /// What a song becomes: the route, the regions along it and the impulses on it.
 pub struct Place {
@@ -122,6 +126,8 @@ pub struct Moment {
     pub camera: Camera,
     /// From 0 to 1: how much light the song gives the place now.
     pub light: f64,
+    /// The accent colour of the land around the listener, which tints the air.
+    pub accent: [f32; 3],
     /// The impulses in play, oldest first.
     pub impulses: Vec<ImpulseInPlay>,
 }
@@ -235,10 +241,10 @@ impl Place {
             impulses: Vec::new(),
             sky: Sky {
                 zenith: colour(hue(fingerprint.brightness) - 0.13, 0.75, 0.1),
-                horizon: colour(hue(fingerprint.brightness) + 0.08, 0.55, 0.55),
+                horizon: colour(hue(fingerprint.brightness) + 0.08, 0.6, 0.42),
                 sun: colour(hue(fingerprint.brightness) + 0.2, 0.45, 1.0),
                 // A fuller sound thickens the air.
-                haze_per_m: (1.0 / mix(6500.0, 3000.0, fingerprint.fullness)) as f32,
+                haze_per_m: (1.0 / mix(11000.0, 5500.0, fingerprint.fullness)) as f32,
             },
         };
 
@@ -260,10 +266,10 @@ impl Place {
                 start_m,
                 accent: colour(
                     hue(section.brightness),
-                    mix(0.35, 0.95, section.fullness),
+                    mix(0.55, 1.0, section.fullness),
                     1.0,
                 ),
-                sharpness: (1.0 - section.fullness) as f32,
+                sharpness: ((SHARP_BELOW - section.fullness) / 0.5).clamp(0.0, 1.0) as f32,
             });
         }
 
@@ -395,6 +401,7 @@ impl Place {
                 bank_deg: BANK_MAX_DEG * (pull / BANK_PULL).tanh(),
             },
             light: read(&self.intensity, self.hop_s, time_s).0,
+            accent: self.character(along).0,
             impulses: self.impulses[first..end]
                 .iter()
                 .map(|impulse| {
@@ -411,11 +418,12 @@ impl Place {
         }
     }
 
-    /// One lantern for each impulse, where its onset sounds: across, up, along, level.
+    /// One lantern for each impulse, where its onset sounds: across, up, along, level, radius.
     pub fn lanterns(&self) -> Vec<f32> {
         let lantern = |i: &Impulse| {
             let [x, z] = i.origin_m.map(|m| m as f32);
-            [x, swell(x, z), z, i.level as f32]
+            let radius = i.altitude_m * (0.02 + 0.06 * i.level);
+            [x, swell(x, z), z, i.level as f32, radius as f32]
         };
         self.impulses.iter().flat_map(lantern).collect()
     }
@@ -457,8 +465,8 @@ impl Place {
                 let x = centre + across;
                 let (px, pz) = ((x / LANDFORM_M) as f32, (along / LANDFORM_M) as f32);
                 let rounded = fractal(px, pz);
-                let ridged = 1.0 - (2.0 * fractal(px + 37.0, pz + 11.0) - 1.0).abs();
-                let shape = rounded + (ridged * ridged - rounded) * sharpness;
+                let ridged = 1.0 - (2.0 * fractal(1.7 * px + 37.0, 1.7 * pz + 11.0) - 1.0).abs();
+                let shape = rounded + (ridged * ridged * ridged - rounded) * sharpness;
                 let rise = ease((across.abs() - floor) / RISE_M)
                     * (0.6 + 0.4 * (across.abs() / HALF_WIDTH_M));
                 let height = relief * rise * (0.2 + 0.8 * f64::from(shape))
@@ -470,7 +478,7 @@ impl Place {
 
         let mut vertices = Vec::with_capacity(rows * COLUMNS * VERTEX_FLOATS);
         let at = |row: usize, column: usize| positions[row * COLUMNS + column];
-        for row in 0..rows {
+        for (row, paint) in paint.iter().enumerate() {
             for column in 0..COLUMNS {
                 // The normal stands across the two directions the ground runs in here.
                 let along = sub(
@@ -489,7 +497,7 @@ impl Place {
                 let length = normal.iter().map(|n| n * n).sum::<f32>().sqrt();
                 vertices.extend(at(row, column));
                 vertices.extend(normal.map(|n| n / length));
-                vertices.extend(paint[row]);
+                vertices.extend(paint);
             }
         }
         Ground {

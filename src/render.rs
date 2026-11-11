@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use wgpu::util::DeviceExt;
 
-use crate::place::{Moment, Place, ROW_M, VERTEX_FLOATS, row_at};
+use crate::place::{LANTERN_FLOATS, Moment, Place, ROW_M, VERTEX_FLOATS, row_at};
 
 /// Pictures are drawn in linear light into an sRGB target, for a still and a window alike.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -14,8 +14,11 @@ const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Tuning: the height of the view, how far ahead the ground is drawn, and where the low
 /// sun stands (across, up, along the route).
 const VIEW_DEG: f64 = 56.0;
-const DRAWN_AHEAD_M: f64 = 12_000.0;
+const DRAWN_AHEAD_M: f64 = 16_000.0;
 const SUN_TOWARD: [f64; 3] = [0.3, 0.13, 1.0];
+/// How far the air takes on the accent of the land around the listener, and how bright
+/// that accent is at the zenith and along the horizon.
+const AIR_TINT: (f32, f32, f32) = (0.55, 0.08, 0.4);
 const NEAR_M: f64 = 1.0;
 const FAR_M: f64 = 60_000.0;
 /// The most impulses drawn at once; the shader's array is this long.
@@ -221,9 +224,9 @@ impl Renderer {
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4],
         };
         let lantern = wgpu::VertexBufferLayout {
-            array_stride: 16,
+            array_stride: (4 * LANTERN_FLOATS) as u64,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32],
         };
 
         let ground = place.ground();
@@ -278,11 +281,11 @@ impl Renderer {
             ),
             // A buffer may not be empty, so a place with no lanterns still holds room for one.
             instances: buffer(
-                &bytes(&[lanterns.as_slice(), &[0.0; 4]].concat()),
+                &bytes(&[lanterns.as_slice(), &[0.0; LANTERN_FLOATS]].concat()),
                 wgpu::BufferUsages::VERTEX,
             ),
             depth: texture(device, size, DEPTH).create_view(&Default::default()),
-            lantern_count: (lanterns.len() / 4) as u32,
+            lantern_count: (lanterns.len() / LANTERN_FLOATS) as u32,
             rows,
             row_indices: (columns - 1) * 6,
             place: fixed,
@@ -348,7 +351,13 @@ impl Renderer {
         uniforms.extend(forward);
         uniforms.push(0.0);
         let mut uniforms: Vec<f32> = uniforms.iter().map(|value| *value as f32).collect();
-        uniforms.extend(self.place);
+        // The air takes on the accent of the land around the listener.
+        let mut colours = self.place;
+        for (channel, accent) in moment.accent.iter().enumerate() {
+            colours[channel] += (AIR_TINT.1 * accent - colours[channel]) * AIR_TINT.0;
+            colours[4 + channel] += (AIR_TINT.2 * accent - colours[4 + channel]) * AIR_TINT.0;
+        }
+        uniforms.extend(colours);
         for impulse in shown {
             let across = impulse.origin_m[0] - origin[0];
             let along = impulse.origin_m[1] - origin[1];

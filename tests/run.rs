@@ -2,26 +2,7 @@
 //! comfort, measured from the pictures and the camera poses.
 mod common;
 
-use std::path::Path;
-
-use common::{Value, f, inspect, json, rising_and_falling_song, scratch, write_wav};
-
-fn run(song: &Path, out: &Path, options: &[&str]) -> Value {
-    let written = inspect("run", song, out, options);
-    let [numbers] = written.as_slice() else {
-        panic!("the command names the numbers of the run: {written:?}");
-    };
-    json(numbers)
-}
-
-fn series(run: &Value, name: &str) -> Vec<f64> {
-    let values = run["series"][name].as_array();
-    values
-        .unwrap_or_else(|| panic!("no series {name}"))
-        .iter()
-        .map(f)
-        .collect()
-}
+use common::{f, rising_and_falling_song, run, scratch, series, write_wav};
 
 #[test]
 fn position_on_the_route_never_runs_backwards_and_goes_faster_where_the_song_is_intense() {

@@ -35,7 +35,7 @@ fn sky(toward: vec3<f32>) -> vec3<f32> {
     let height = clamp(toward.y, 0.0, 1.0);
     let sun = max(dot(toward, moment.sun_toward.xyz), 0.0);
     return mix(moment.horizon.rgb, moment.zenith.rgb, 1.0 - exp(-4.5 * height))
-        + moment.sun.rgb * (0.35 * pow(sun, 5.0) + 0.9 * pow(sun, 60.0) + 8.0 * pow(sun, 2500.0));
+        + moment.sun.rgb * (0.12 * pow(sun, 8.0) + 0.7 * pow(sun, 80.0) + 8.0 * pow(sun, 2500.0));
 }
 
 // A fixed value from 0 to 1 for each point of a grid, and smooth noise through them.
@@ -104,27 +104,33 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
 
     // Dark, grained matter lit by the low sun and the sky. Grain too fine to draw fades out.
     let grain = mix(0.5, noise(across / 9.0), clamp(1.0 - range / 900.0, 0.0, 1.0));
-    let matter = mix(vec3<f32>(0.06), accent * 0.3, 0.55) * (0.6 + 0.8 * grain);
+    // Level ground lies wet and dark.
+    let wet = smoothstep(0.86, 0.995, normal.y);
+    let matter = mix(vec3<f32>(0.05), accent * 0.32, 0.7) * (0.6 + 0.8 * grain) * (1.0 - 0.6 * wet);
     let sunlit = max(dot(normal, moment.sun_toward.xyz), 0.0);
     var colour = matter
         * (moment.sun.rgb * sunlit * 2.2 + moment.zenith.rgb * (0.5 + 0.5 * normal.y) * 1.6 + moment.horizon.rgb * 0.25);
 
-    // Level ground shines like water: it shows the sky beyond it, most of all at a glance.
+    // It shines like water: it shows the sky beyond it, most of all at a glance.
     let mirrored = reflect(toward, normal);
     let glance = pow(1.0 - max(dot(-toward, normal), 0.0), 4.0);
-    let shine = (0.05 + 0.95 * glance) * smoothstep(0.86, 0.995, normal.y);
+    let shine = (0.05 + 0.95 * glance) * wet;
     colour = mix(colour, sky(normalize(vec3<f32>(mirrored.x, abs(mirrored.y) + 0.02, mirrored.z))), 0.7 * shine);
     // All of that is as bright as the song gives light now.
     colour *= light();
 
-    // The land glows from within where the song is intense, whatever the light is now,
-    // most of all along broken seams at even heights. Seams too fine to draw fade out.
+    // The land glows from within where the song is intense, whatever the light is now:
+    // along broken seams at even heights, and in veins that wander over the slopes.
+    // Seams and veins too fine to draw fade out.
     let level = in.place.y / SEAM_M;
     let fine = fwidth(level);
     let seam = (1.0 - smoothstep(0.02, 0.04 + fine, abs(fract(level) - 0.5)))
         * clamp(1.0 - 2.5 * fine, 0.0, 1.0)
         * smoothstep(0.42, 0.62, noise(across / 140.0 + vec2<f32>(floor(level) * 7.0)));
-    colour += accent * in.paint.a * in.paint.a * GLOW * (0.1 + seam);
+    let wander = abs(2.0 * noise(across / 80.0) - 1.0);
+    let vein = (1.0 - smoothstep(0.0, 0.015 + 1.5 * fwidth(wander), wander))
+        * clamp(1.0 - range / 2500.0, 0.0, 1.0) * (1.0 - wet);
+    colour += accent * in.paint.a * in.paint.a * GLOW * (0.04 + seam + 0.5 * vein);
 
     // Each impulse in play is a ring of light running out over the ground from its lantern.
     for (var i = 0; i < i32(moment.right.w); i++) {
@@ -145,7 +151,11 @@ struct LanternOut {
 }
 
 @vertex
-fn lantern_vertex(@builtin(vertex_index) index: u32, @location(0) lantern: vec4<f32>) -> LanternOut {
+fn lantern_vertex(
+    @builtin(vertex_index) index: u32,
+    @location(0) lantern: vec4<f32>, // xyz: where it stands. w: level.
+    @location(1) radius: f32,
+) -> LanternOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
@@ -154,7 +164,6 @@ fn lantern_vertex(@builtin(vertex_index) index: u32, @location(0) lantern: vec4<
     let place = lantern.xyz - moment.origin.xyz;
     let range = length(place - moment.eye.xyz);
     // A lantern is never drawn smaller than a few pixels: it dims instead.
-    let radius = 0.4 + 1.2 * lantern.w;
     let drawn = max(radius, range * 0.0016);
     let centre = place
         + drawn * (corner.x * normalize(moment.right.xyz) + (corner.y + 1.0) * normalize(moment.up.xyz));

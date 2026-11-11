@@ -159,7 +159,13 @@ mod tests {
     fn square(low: f32, high: f32, per_second: usize) -> Vec<f32> {
         let half = 144 / (2 * per_second);
         (0..432)
-            .map(|at| if (at / half) % 2 == 0 { low } else { high })
+            .map(|at| {
+                if (at / half).is_multiple_of(2) {
+                    low
+                } else {
+                    high
+                }
+            })
             .collect()
     }
 
