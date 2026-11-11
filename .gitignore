@@ -1,0 +1,33 @@
+# Rust build output
+target/
+**/*.rs.bk
+
+# Cargo.lock stays tracked: this is an application.
+
+# Songs are private inputs and never repository content.
+*.flac
+*.wav
+*.mp3
+*.ogg
+*.opus
+*.m4a
+*.aac
+*.aiff
+
+# Derived, disposable output
+/cache/
+/stills/
+/captures/
+/logs/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local.toml
+
+# Editor and OS files
+.DS_Store
+*~
+*.swp
+*.swo
