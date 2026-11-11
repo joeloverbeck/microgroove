@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 
-use crate::analysis::{Analysis, BANDS, Part, Section, smooth};
+use crate::analysis::{Analysis, BANDS, Onset, Part, Section, smooth};
 
 /// Speed along the route at intensity 0 and at intensity 1, in metres per second of song.
 /// Between them each equal step of intensity multiplies it alike.
@@ -27,6 +27,10 @@ pub const DIAL_MOST: i32 = 8;
 /// its height, and along the heading the route has half that long on.
 const LOOK_AHEAD_S: f64 = 1.5;
 const LOOK_DOWN: f64 = 0.35;
+/// The height of the camera's view, and how many times as wide as it is tall the picture
+/// is taken to be where a form is stood to leave it: the display's 16 to 9.
+const VIEW_DEG: f64 = 56.0;
+const PICTURE: f64 = 16.0 / 9.0;
 /// At a boundary trusted in full the route turns by this slope, over this long a stretch
 /// of the song, whatever the speed does meanwhile.
 const TURN: f64 = 0.38;
@@ -103,8 +107,8 @@ const LEAN_DB: f32 = 3.0;
 /// for a middle one, thin masts for a high one. For each, in floor half-widths: where it
 /// stands from the middle of the route, half its width across the route, half its depth
 /// along it, and its height at level 0 and at level 1. The nearer the route a form
-/// stands, the later it leaves the picture before the listener passes it. Its foot is
-/// sunk this many metres into the ground, which is nowhere quite level.
+/// stands, the nearer the listener is to it as it leaves the picture. Its foot is sunk
+/// this many metres into the ground, which is nowhere quite level.
 const FORMS: [(f64, f64, f64, (f64, f64)); 3] = [
     (0.5, 0.5, 0.015, (0.012, 0.022)),
     (0.75, 0.06, 0.06, (0.5, 1.0)),
@@ -163,8 +167,9 @@ struct Region {
     accent: [f32; 3],
 }
 
-/// The place's answer to one onset, standing where the route is as the onset sounds: a
-/// form where the onset stands out, and a small lantern on the route where it does not.
+/// The place's answer to one onset: a form where the onset stands out, and a small
+/// lantern on the route where it does not. `origin_m` is where the route is as the onset
+/// sounds, across and along.
 struct Impulse {
     onset_s: f64,
     origin_m: [f64; 2],
@@ -174,6 +179,8 @@ struct Impulse {
     floor_m: f64,
     /// The kind of form, by the part of the sound that jumped, and the side it stands on.
     form: Option<(Part, Side)>,
+    /// The boxes the form stands as: see `Place::stood`.
+    boxes: Vec<[f64; FORM_FLOATS]>,
 }
 
 /// What kind of place a region is. Its section's own sound chooses it: still water where
@@ -270,6 +277,31 @@ pub struct Camera {
     pub yaw_deg: f64,
     pub pitch_deg: f64,
     pub bank_deg: f64,
+    /// The height of its view.
+    pub view_deg: f64,
+}
+
+impl Camera {
+    /// The ways the camera's right, its up and its view point: across, up, along.
+    pub fn axes(&self) -> [[f64; 3]; 3] {
+        let [yaw, pitch, bank] = [self.yaw_deg, self.pitch_deg, self.bank_deg].map(f64::to_radians);
+        let forward = [
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        ];
+        let level = [yaw.cos(), 0.0, -yaw.sin()];
+        let over = [
+            forward[1] * level[2] - forward[2] * level[1],
+            forward[2] * level[0] - forward[0] * level[2],
+            forward[0] * level[1] - forward[1] * level[0],
+        ];
+        // Banking tips the camera toward the inside of the turn.
+        let tip = |a: [f64; 3], b: [f64; 3], sign: f64| {
+            [0, 1, 2].map(|i| a[i] * bank.cos() + sign * b[i] * bank.sin())
+        };
+        [tip(level, over, -1.0), tip(over, level, 1.0), forward]
+    }
 }
 
 /// The land across the route at the listener's position: its height above the floor on
@@ -295,11 +327,13 @@ pub struct ImpulseInPlay {
 
 #[derive(Serialize)]
 pub struct FormInView {
-    /// The song time of its onset, and where on the route it stands.
+    /// The song time of its onset, as which the last of it leaves the picture.
     pub onset_s: f64,
-    pub route_m: f64,
     pub kind: Part,
     pub side: Side,
+    /// The boxes it stands as, one on each side it stands on: the middle of its foot
+    /// (across, up, along), half its width, its height and half its depth along the route.
+    pub boxes_m: Vec<[f64; FORM_FLOATS]>,
 }
 
 /// A summary of the place, written beside each still. No pulse is in it because none
@@ -446,10 +480,8 @@ impl Place {
         let full = strengths
             .get(strengths.len().saturating_sub(1) * FULL_LEVEL_PERCENTILE / 100)
             .map_or(1.0, |strength| f64::from(*strength));
-        place.impulses = analysis
-            .onsets
-            .iter()
-            .map(|onset| Impulse {
+        let impulse = |onset: &Onset| {
+            let mut impulse = Impulse {
                 onset_s: onset.time_s,
                 origin_m: [place.across(onset.time_s), place.distance_at(onset.time_s)],
                 level: (f64::from(onset.strength) / full).min(1.0),
@@ -463,8 +495,12 @@ impl Place {
                         _ => Side::Centre,
                     },
                 )),
-            })
-            .collect();
+                boxes: Vec::new(),
+            };
+            impulse.boxes = place.stood(&impulse);
+            impulse
+        };
+        place.impulses = analysis.onsets.iter().map(impulse).collect();
         place
     }
 
@@ -544,17 +580,74 @@ impl Place {
         ]
     }
 
-    /// The place at a song time, seen with the dial so many steps up or down.
-    pub fn moment(&self, song_time_s: f64, dial: i32) -> Moment {
-        let time_s = song_time_s.clamp(0.0, self.duration_s);
-        let nearer = DIAL_STEP.powi(dial.clamp(-DIAL_MOST, DIAL_MOST));
+    /// The camera at a song time, the dial having brought it `nearer` the ground.
+    fn camera(&self, time_s: f64, nearer: f64) -> Camera {
         let eye = self.flight(time_s, nearer);
         let ahead = self.flight(time_s + LOOK_AHEAD_S, nearer);
-        let (along, speed) = (eye[2], self.speed(time_s));
         let sink = ahead[1] - eye[1] - LOOK_DOWN * eye[1];
         // The view turns as the route's heading does, and the camera leans as the view turns.
         let (slope, changing) = self.heading(time_s + LOOK_AHEAD_S / 2.0);
         let turning_deg_s = (changing / (1.0 + slope * slope)).to_degrees();
+        Camera {
+            position_m: eye,
+            yaw_deg: slope.atan().to_degrees(),
+            pitch_deg: sink
+                .atan2((ahead[0] - eye[0]).hypot(ahead[2] - eye[2]))
+                .to_degrees(),
+            bank_deg: BANK_MAX_DEG * (turning_deg_s / BANK_TURNING_DEG_S).tanh(),
+            view_deg: VIEW_DEG,
+        }
+    }
+
+    /// The boxes a form stands as, one on each side it stands on: the middle of its foot
+    /// (across, up, along), half its width across the route, its height, and half its
+    /// depth along the route. The camera looks ahead, so a thing beside it is already out
+    /// of the picture: each box stands further along the route than the route is as its
+    /// onset sounds, by as far as has the last of it leave the picture at that moment.
+    /// The picture is the camera's own then, with the dial at rest.
+    fn stood(&self, impulse: &Impulse) -> Vec<[f64; FORM_FLOATS]> {
+        let Some((part, side)) = impulse.form else {
+            return Vec::new();
+        };
+        let (out, across, along, tall) = FORMS[part as usize];
+        let sides: &[f64] = match side {
+            Side::Left => &[-1.0],
+            Side::Centre => &[-1.0, 1.0],
+            Side::Right => &[1.0],
+        };
+        let floor = impulse.floor_m;
+        let height = mix(tall.0, tall.1, impulse.level) * floor + SUNK_M;
+        let stand = |(toward, ahead): (&f64, &f64)| {
+            let z = impulse.origin_m[1] + ahead;
+            let x = self.across(self.time_at(z));
+            let foot = f64::from(self.level(x, z)) - SUNK_M;
+            let x = x + toward * out * floor;
+            [x, foot, z, across * floor, height, along * floor]
+        };
+        let camera = self.camera(impulse.onset_s, 1.0);
+        let slope = self.heading(impulse.onset_s).0;
+        let mut ahead = vec![0.0; sides.len()];
+        // Where a box stands sets the ground under it and the bend of the route up to
+        // it, and those move how far ahead it must stand, a little: three goes settle it.
+        for _ in 0..3 {
+            let further = |at: (&f64, &f64)| further_m(&camera, slope, stand(at));
+            let further: Vec<f64> = sides.iter().zip(&ahead).map(further).collect();
+            // A rib is one thing across the floor: both halves stand where the last of it leaves.
+            let least = further.iter().copied().fold(f64::MAX, f64::min);
+            for (ahead, further) in ahead.iter_mut().zip(further) {
+                *ahead += if part == Part::Low { least } else { further };
+            }
+        }
+        sides.iter().zip(&ahead).map(stand).collect()
+    }
+
+    /// The place at a song time, seen with the dial so many steps up or down.
+    pub fn moment(&self, song_time_s: f64, dial: i32) -> Moment {
+        let time_s = song_time_s.clamp(0.0, self.duration_s);
+        let nearer = DIAL_STEP.powi(dial.clamp(-DIAL_MOST, DIAL_MOST));
+        let camera = self.camera(time_s, nearer);
+        let eye = camera.position_m;
+        let (along, speed) = (eye[2], self.speed(time_s));
         let light = read(&self.intensity, self.hop_s, time_s);
         let first = self
             .impulses
@@ -574,14 +667,7 @@ impl Place {
             route_position_m: along,
             region,
             kind: self.regions[region].kind,
-            camera: Camera {
-                position_m: eye,
-                yaw_deg: slope.atan().to_degrees(),
-                pitch_deg: sink
-                    .atan2((ahead[0] - eye[0]).hypot(ahead[2] - eye[2]))
-                    .to_degrees(),
-                bank_deg: BANK_MAX_DEG * (turning_deg_s / BANK_TURNING_DEG_S).tanh(),
-            },
+            camera,
             light,
             speed_m_s: speed,
             over_ground_per_s: speed / (eye[1] - f64::from(self.level(eye[0], along))),
@@ -605,9 +691,9 @@ impl Place {
             forms: forms(first..seen.max(end))
                 .map(|(impulse, (kind, side))| FormInView {
                     onset_s: impulse.onset_s,
-                    route_m: impulse.origin_m[1],
                     kind,
                     side,
+                    boxes_m: impulse.boxes.clone(),
                 })
                 .collect(),
         }
@@ -625,31 +711,10 @@ impl Place {
         lesser.flat_map(lantern).collect()
     }
 
-    /// The forms as boxes, one on each side a form stands on: the middle of its foot
-    /// (across, up, along), half its width across the route, its height, and half its
-    /// depth along the route.
+    /// The boxes every form stands as, one after another: see `stood`.
     pub fn forms(&self) -> Vec<f32> {
-        let mut boxes = Vec::new();
-        for impulse in &self.impulses {
-            let Some((part, side)) = impulse.form else {
-                continue;
-            };
-            let (out, across, along, tall) = FORMS[part as usize];
-            let sides: &[f64] = match side {
-                Side::Left => &[-1.0],
-                Side::Centre => &[-1.0, 1.0],
-                Side::Right => &[1.0],
-            };
-            let ([x, z], floor) = (impulse.origin_m, impulse.floor_m);
-            let foot = f64::from(self.level(x, z)) - SUNK_M;
-            let height = mix(tall.0, tall.1, impulse.level) * floor + SUNK_M;
-            for toward in sides {
-                let x = x + toward * out * floor;
-                let form = [x, foot, z, across * floor, height, along * floor];
-                boxes.extend(form.map(|part| part as f32));
-            }
-        }
-        boxes
+        let boxes = self.impulses.iter().flat_map(|impulse| &impulse.boxes);
+        boxes.flatten().map(|part| *part as f32).collect()
     }
 
     /// The accent colour of the land at a distance along the route, and how far it is each
@@ -867,6 +932,50 @@ impl Place {
             vertices,
         }
     }
+}
+
+/// How much further along a route of the given slope a box (see `Place::stood`) would
+/// have to stand for the last of it to be on the edge of a camera's picture: below zero
+/// while some of it is in the picture. The last of a box to leave is on one of its edges.
+fn further_m(camera: &Camera, slope: f64, form: [f64; FORM_FLOATS]) -> f64 {
+    let [right, up, forward] = camera.axes();
+    let tall = (camera.view_deg / 2.0).to_radians().tan();
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // How far along the route a corner must move to be on each side of the picture.
+    let needs = |corner: usize| {
+        let to = |axis: usize| (corner >> axis & 1) as f64;
+        let from_eye = [
+            form[0] + (2.0 * to(0) - 1.0) * form[3] - camera.position_m[0],
+            form[1] + to(1) * form[4] - camera.position_m[1],
+            form[2] + (2.0 * to(2) - 1.0) * form[5] - camera.position_m[2],
+        ];
+        [(right, -PICTURE), (right, PICTURE), (up, -1.0), (up, 1.0)].map(|(axis, wide)| {
+            let side = [0, 1, 2].map(|i| tall * wide.abs() * forward[i] + wide.signum() * axis[i]);
+            -dot(side, from_eye) / dot(side, [slope, 0.0, 1.0])
+        })
+    };
+    let edges = (0..8).flat_map(|corner| (0..3).map(move |axis| (corner, corner | 1 << axis)));
+    edges
+        .filter(|(from, to)| from != to)
+        .map(|(from, to)| least_of_greatest(needs(from), needs(to)))
+        .fold(f64::MAX, f64::min)
+}
+
+/// The least, anywhere between two ends, of the greatest of four values that each run
+/// evenly from one end to the other: it lies at an end or where two of them cross.
+fn least_of_greatest(from: [f64; 4], to: [f64; 4]) -> f64 {
+    let greatest = |share: f64| {
+        let values = from.iter().zip(to).map(|(from, to)| mix(*from, to, share));
+        values.fold(f64::MIN, f64::max)
+    };
+    let cross = |one: usize, other: usize| {
+        (from[other] - from[one]) / (to[one] - from[one] - to[other] + from[other])
+    };
+    let crossings = (0..4).flat_map(|one| (0..one).map(move |other| cross(one, other)));
+    crossings
+        .filter(|share| (0.0..1.0).contains(share))
+        .map(greatest)
+        .fold(greatest(0.0).min(greatest(1.0)), f64::min)
 }
 
 /// How far from the middle of the land a share of its half-width lies: the columns of

@@ -49,7 +49,7 @@ The place's visible answer to one onset.
 _Avoid_: flash, pulse
 
 **Form**:
-The impulse of an onset that stands out in the song: a thing standing where the route is at the onset's song time, which the listener passes as it sounds. A rib across the floor for a low sound, standing stones beside the route for a middle one, thin masts for a high one.
+The impulse of an onset that stands out in the song: a thing standing on the route a little past where the route is at the onset's song time, so that the last of it leaves the listener's view as the onset sounds. A rib across the floor for a low sound, standing stones beside the route for a middle one, thin masts for a high one.
 _Avoid_: hit, obstacle
 
 **Moment**:

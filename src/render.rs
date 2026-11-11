@@ -11,9 +11,8 @@ use crate::place::{FORM_FLOATS, LANTERN_FLOATS, Moment, Place, ROW_M, VERTEX_FLO
 /// Pictures are drawn in linear light into an sRGB target, for a still and a window alike.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-/// Tuning: the height of the view, how far ahead the ground is drawn, and where the low
-/// sun stands (across, up, along the route).
-const VIEW_DEG: f64 = 56.0;
+/// Tuning: how far ahead the ground is drawn, and where the low sun stands (across, up,
+/// along the route).
 const DRAWN_AHEAD_M: f64 = 16_000.0;
 const SUN_TOWARD: [f64; 3] = [0.3, 0.13, 1.0];
 /// How far the air takes on the accent of the land around the listener, and how bright
@@ -346,20 +345,7 @@ impl Renderer {
     /// in play, and the place's fixed colours.
     fn uniforms(&self, moment: &Moment) -> Vec<f32> {
         let camera = &moment.camera;
-        let [yaw, pitch, bank] =
-            [camera.yaw_deg, camera.pitch_deg, camera.bank_deg].map(f64::to_radians);
-        let forward = [
-            yaw.sin() * pitch.cos(),
-            pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        ];
-        let level = [yaw.cos(), 0.0, -yaw.sin()];
-        let over = cross(forward, level);
-        // Banking tips the camera toward the inside of the turn.
-        let tip = |a: [f64; 3], b: [f64; 3], sign: f64| {
-            [0, 1, 2].map(|i| a[i] * bank.cos() + sign * b[i] * bank.sin())
-        };
-        let (right, up) = (tip(level, over, -1.0), tip(over, level, 1.0));
+        let [right, up, forward] = camera.axes();
 
         let origin = [0, 2].map(|i| (camera.position_m[i] / ORIGIN_GRID_M).round() * ORIGIN_GRID_M);
         let eye = [
@@ -367,10 +353,8 @@ impl Renderer {
             camera.position_m[1],
             camera.position_m[2] - origin[1],
         ];
-        let half = (
-            (VIEW_DEG / 2.0).to_radians().tan() * self.aspect,
-            (VIEW_DEG / 2.0).to_radians().tan(),
-        );
+        let tall = (camera.view_deg / 2.0).to_radians().tan();
+        let half = (tall * self.aspect, tall);
         let (deep, shift) = (FAR_M / (FAR_M - NEAR_M), -NEAR_M * FAR_M / (FAR_M - NEAR_M));
         let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         let column = |i: usize| {
@@ -473,14 +457,6 @@ impl Renderer {
             }
         }
     }
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 /// The window a journey is shown in. A picture is drawn exactly as a still is and then

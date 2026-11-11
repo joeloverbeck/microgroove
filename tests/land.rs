@@ -116,13 +116,54 @@ fn strike(signal: &mut [f32], at_s: f64, hz: f64, amplitude: f32) {
     }
 }
 
+/// How far inside the picture the last of a form is at a moment, by that moment's camera,
+/// in halves of the picture: above zero some of the form is in the picture, at zero the
+/// last of it is on the picture's edge, and below zero all of it is outside.
+fn inside(moment: &Value, form: &Value) -> f64 {
+    let camera = &moment["camera"];
+    let turned = |part: &str| num(&camera[part]).to_radians().sin_cos();
+    let ((yaw_sin, yaw_cos), (pitch_sin, pitch_cos)) = (turned("yaw_deg"), turned("pitch_deg"));
+    let (bank_sin, bank_cos) = turned("bank_deg");
+    let (eye, size) = (curve(&camera["position_m"]), curve(&moment["size"]));
+    let tall = (num(&camera["view_deg"]).to_radians() / 2.0).tan();
+    let at = |point: [f64; 3]| {
+        let [x, y, z] = [0, 1, 2].map(|axis| point[axis] - eye[axis]);
+        let (aside, ahead) = (x * yaw_cos - z * yaw_sin, x * yaw_sin + z * yaw_cos);
+        let (above, deep) = (
+            y * pitch_cos - ahead * pitch_sin,
+            y * pitch_sin + ahead * pitch_cos,
+        );
+        let across = (aside * bank_cos - above * bank_sin).abs() * size[1] / size[0];
+        let up = (above * bank_cos + aside * bank_sin).abs();
+        1.0 - across.max(up) / (tall * deep.max(1e-9))
+    };
+    // Points along the twelve edges of each box the form stands as, 513 to an edge: the
+    // last of a box to leave the picture is on an edge. The numbers give the middle of
+    // its foot, then half its width, its height and half its depth.
+    let boxes = form["boxes_m"].as_array().expect("the boxes of a form");
+    let points = boxes.iter().map(curve).flat_map(|b| {
+        (0..12 * 513).map(move |n| {
+            let mut share = [n / 513 % 2, n / 1026 % 2, 0].map(|end| end as f64);
+            share[2] = (n % 513) as f64 / 512.0;
+            share.rotate_right(n / 2052 + 1);
+            let [across, up, along] = share;
+            let (across, along) = (2.0 * across - 1.0, 2.0 * along - 1.0);
+            [b[0] + across * b[3], b[1] + up * b[4], b[2] + along * b[5]]
+        })
+    });
+    points.map(at).fold(f64::MIN, f64::max)
+}
+
 #[test]
-fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_where_their_time_is() {
+fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_that_leaves_the_picture_as_they_sound()
+ {
     let dir = scratch("land-forms");
     let song = dir.join("strikes.wav");
     // Four low thumps, four middle bursts and four high clicks a second apart, with a
     // faint one of each kind among them. The middle burst at 9 s is in the left channel
-    // only, with the power the others have in their two channels together.
+    // only, with the power the others have in their two channels together. Under the
+    // last of them a steady high tone has come in too gently to be an onset, so that the
+    // song is quiet and then loud: a slow passage and a fast one.
     let kinds = [
         ("low", 80.0, 2.0),
         ("middle", 1000.0, 3.0),
@@ -142,6 +183,12 @@ fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_where_their_time
         for channel in [&mut left, &mut right] {
             strike(channel, first_s + 3.5, hz, 0.02);
         }
+    }
+    for (n, bed) in common::tone(16.0, 3000.0, 0.5).iter().enumerate() {
+        let before_full_s = 9.0 - n as f32 / common::RATE as f32;
+        let bed = bed * 10f32.powf(-before_full_s.max(0.0)) * f32::from(before_full_s < 3.0);
+        left[n] += bed;
+        right[n] += bed;
     }
     write_wav(&song, &left, &right);
 
@@ -171,23 +218,28 @@ fn onsets_that_stand_out_get_a_form_of_their_kind_on_their_side_where_their_time
         "a form for each strong strike and no other: {forms:?}"
     );
 
-    // The listener is at a form's place on the route as its strike sounds.
-    let times: Vec<String> = found
-        .iter()
-        .map(|(second, ..)| second.to_string())
+    // A form leaves the picture as its strike sounds: a moment before, some of it is still
+    // in the picture, and at its onset the last of it is on the picture's edge.
+    let onsets = forms.iter().map(|form| num(&form["onset_s"]));
+    let times: Vec<String> = onsets
+        .flat_map(|onset| [onset - 0.03, onset])
+        .map(|time| time.to_string())
         .collect();
     let times: Vec<&str> = times.iter().map(String::as_str).collect();
-    for (moment, form) in moments(&song, &dir.join("passing"), &times)
-        .iter()
-        .zip(&forms)
-    {
-        let (listener, stands) = (num(&moment["route_position_m"]), num(&form["route_m"]));
-        let within = 0.02 * num(&moment["speed_m_s"]);
+    let passing = moments(&song, &dir.join("passing"), &times);
+    for (pair, form) in passing.chunks(2).zip(&forms) {
+        let (before, at) = (inside(&pair[0], form), inside(&pair[1], form));
         assert!(
-            (listener - stands).abs() <= within,
-            "the form of the strike at {} s stands at {stands} m; the listener is at \
-             {listener} m then, and should be within {within} m",
-            moment["song_time_s"]
+            before > 0.02 && at.abs() <= 0.01,
+            "the form of the strike at {} s: 0.03 s before, the last of it is {before} of half \
+             the picture inside the picture; as it sounds, {at}",
+            form["onset_s"]
         );
+    }
+    // The strikes at 2, 3 and 4 s are one of each kind, and so are those at 10, 11 and 12 s.
+    let speed = |strike: usize| num(&passing[2 * strike + 1]["speed_m_s"]);
+    for slow in 0..3 {
+        let (slow, fast) = (speed(slow), speed(slow + 8));
+        assert!(fast > 4.0 * slow, "{slow} m/s and {fast} m/s");
     }
 }
