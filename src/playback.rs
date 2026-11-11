@@ -13,14 +13,14 @@ use crate::decode::Song;
 /// The audio device playing the song, and the clock it keeps.
 pub struct Playback {
     stream: cpal::Stream,
-    heard: Arc<Mutex<Heard>>,
+    shared: Arc<Mutex<Shared>>,
     /// Which device plays, and how it was asked to.
     device: String,
 }
 
 /// What the audio device and the journey share. The device holds it only long enough to
 /// say what it wants; the journey only long enough to read the time.
-pub struct Heard {
+pub struct Shared {
     pub clock: Clock,
     /// How often the device has asked for frames, the fewest and the most it asked for
     /// at once, and the least and the most time it gave before they would sound.
@@ -48,7 +48,7 @@ impl Playback {
             buffer_size: cpal::BufferSize::Default,
         };
         let from = ((from_s * f64::from(rate)).round() as usize).min(song.frames());
-        let heard = Arc::new(Mutex::new(Heard {
+        let shared = Arc::new(Mutex::new(Shared {
             clock: Clock::new(rate, song.frames(), from),
             asks: 0,
             lot: [usize::MAX, 0],
@@ -56,7 +56,7 @@ impl Playback {
             first_ask: None,
             problems: Vec::new(),
         }));
-        let (asking, failing) = (heard.clone(), heard.clone());
+        let (asking, failing) = (shared.clone(), shared.clone());
         let told = Instant::now();
         let stream = output
             .build_output_stream(
@@ -67,15 +67,15 @@ impl Playback {
                     let ahead_ns = due_ns.saturating_sub(said.callback.as_nanos() as u64);
                     let wanted = out.len() / 2;
                     let lot = {
-                        let mut heard = asking.lock().unwrap();
-                        heard.asks += 1;
-                        heard.lot = [heard.lot[0].min(wanted), heard.lot[1].max(wanted)];
-                        heard.ahead_ns = [
-                            heard.ahead_ns[0].min(ahead_ns),
-                            heard.ahead_ns[1].max(ahead_ns),
+                        let mut shared = asking.lock().unwrap();
+                        shared.asks += 1;
+                        shared.lot = [shared.lot[0].min(wanted), shared.lot[1].max(wanted)];
+                        shared.ahead_ns = [
+                            shared.ahead_ns[0].min(ahead_ns),
+                            shared.ahead_ns[1].max(ahead_ns),
                         ];
-                        heard.first_ask.get_or_insert_with(|| told.elapsed());
-                        heard.clock.take(wanted, due_ns)
+                        shared.first_ask.get_or_insert_with(|| told.elapsed());
+                        shared.clock.take(wanted, due_ns)
                     };
                     out.fill(0.0);
                     for (pair, frame) in out.chunks_exact_mut(2).zip(lot) {
@@ -99,7 +99,7 @@ impl Playback {
             .map_err(|error| format!("the audio device will not start ({error})"))?;
         Ok(Playback {
             stream,
-            heard,
+            shared,
             device: format!(
                 "{:?}, {}, {rate} Hz, 2 channels, f32",
                 host.id(),
@@ -108,32 +108,33 @@ impl Playback {
         })
     }
 
-    pub fn heard(&self) -> MutexGuard<'_, Heard> {
-        self.heard.lock().unwrap()
+    pub fn shared(&self) -> MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap()
     }
 
     /// The song time being heard now, the song time of the moment to show now, and
     /// whether the song has ended.
     pub fn now(&self) -> (f64, f64, bool) {
         let now_ns = self.stream.now().as_nanos() as u64;
-        let mut heard = self.heard();
-        let clock = &mut heard.clock;
+        let mut shared = self.shared();
+        let clock = &mut shared.clock;
         (clock.heard_s(now_ns), clock.shown_s(now_ns), clock.ended())
     }
 
     /// What the device was and did, for a journey's measurements.
     pub fn measured(&self) -> Value {
-        let heard = self.heard();
+        let shared = self.shared();
         let ms = |ns: u64| ns as f64 / 1e6;
         json!({
             "device": self.device,
-            "asks": heard.asks,
-            "frames_asked_for": heard.lot,
-            "ms_given_before_sounding": heard.ahead_ns.map(ms),
-            "first_ask_ms_after_play": heard.first_ask.map(|after| after.as_secs_f64() * 1e3),
-            "sayings_wander_ms": heard.clock.wander_ms(),
-            "steady_line_laid": heard.clock.laid,
-            "problems": heard.problems,
+            "asks": shared.asks,
+            "frames_asked_for": shared.lot,
+            "ms_given_before_sounding": shared.ahead_ns.map(ms),
+            "first_ask_ms_after_play": shared.first_ask.map(|after| after.as_secs_f64() * 1e3),
+            "sayings_wander_ms": shared.clock.wander_ms(),
+            "line_laid_at_song_s_moving_it_ms": shared.clock.laid,
+            "sayings_passed_over_at_song_s_off_by_ms": shared.clock.passed_over,
+            "problems": shared.problems,
         })
     }
 }
@@ -146,9 +147,13 @@ pub struct Clock {
     pub nudge_ms: i32,
     /// While set, the device is handed no frames, so sound and picture stop together.
     pub paused: bool,
-    /// How many times the steady line through the device's sayings was laid afresh:
-    /// once when sound begins, and again wherever the sound breaks off and comes back.
-    pub laid: u32,
+    /// Each time the steady line through the device's sayings was laid afresh: the song
+    /// time it was laid at, and how far that moved it, in ms. Once where sound begins,
+    /// again where it begins again after a pause, and wherever the sound breaks off.
+    pub laid: Vec<[f64; 2]>,
+    /// Each saying that stood beyond the break by itself and was passed over: the song
+    /// time it was for, and how far from the line it stood, in ms.
+    pub passed_over: Vec<[f64; 2]>,
     rate: f64,
     frames: usize,
     /// Frames of the song handed to the device so far.
@@ -160,11 +165,17 @@ pub struct Clock {
     began_ns: Option<f64>,
     /// How far the device's sayings stand from the steady line, as a running average.
     wander_ns: f64,
+    /// No frames were handed over at the last asking: sound begins with the next that are.
+    idle: bool,
+    /// Where the last saying would put the line, if it stood beyond the break.
+    stray_ns: Option<f64>,
 }
 
 /// Tuning. Each saying moves the steady line this share of the way toward itself, so
 /// that the small unevenness of a device's sayings does not reach the picture. A saying
-/// further than `BREAK_NS` from the line is a break in the sound, not unevenness.
+/// further than `BREAK_NS` from the line is not unevenness. By itself it is a stray and
+/// moves nothing; when the next saying agrees with it, the sound has broken off, and the
+/// line is laid afresh through that one.
 const FOLLOW: f64 = 1.0 / 32.0;
 const BREAK_NS: f64 = 3e6;
 
@@ -174,13 +185,16 @@ impl Clock {
         Clock {
             nudge_ms: 0,
             paused: false,
-            laid: 0,
+            laid: Vec::new(),
+            passed_over: Vec::new(),
             rate: f64::from(rate),
             frames,
             handed: from,
             heard: from as f64,
             began_ns: None,
             wander_ns: 0.0,
+            idle: true,
+            stray_ns: None,
         }
     }
 
@@ -194,16 +208,24 @@ impl Clock {
         };
         if lot > 0 {
             let said_ns = due_ns as f64 - self.handed as f64 * 1e9 / self.rate;
-            let off_ns = said_ns - self.began_ns.unwrap_or(f64::INFINITY);
-            if off_ns.abs() > BREAK_NS {
+            let off_ns = said_ns - self.began_ns.unwrap_or(said_ns);
+            let noted = [self.handed as f64 / self.rate, off_ns / 1e6];
+            let far = off_ns.abs() > BREAK_NS;
+            let agreed = |stray_ns: f64| (said_ns - stray_ns).abs() <= BREAK_NS;
+            let lays = self.idle || far && self.stray_ns.is_some_and(agreed);
+            self.stray_ns = (far && !lays).then_some(said_ns);
+            if lays {
                 self.began_ns = Some(said_ns);
-                self.laid += 1;
+                self.laid.push(noted);
+            } else if far {
+                self.passed_over.push(noted);
             } else {
                 self.began_ns = Some(said_ns - off_ns * (1.0 - FOLLOW));
                 self.wander_ns += (off_ns.abs() - self.wander_ns) * FOLLOW;
             }
             self.handed += lot;
         }
+        self.idle = lot == 0;
         self.handed - lot..self.handed
     }
 
@@ -233,8 +255,9 @@ impl Clock {
     }
 }
 
-/// The one inner seam beside the command line: a real audio device cannot run inside a
-/// test, so the mapping is driven by a fake one whose answers are known by construction.
+/// The inner seam issue #1 accepts beside the command line: a real audio device cannot
+/// run inside a test, so the mapping is driven by a fake one whose answers are known by
+/// construction. A second inner seam exists in `src/comfort.rs`, kept pending the owner's word.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,7 +348,8 @@ mod tests {
         );
         let handed: Vec<usize> = device.handed.iter().map(|lot| lot.start).collect();
         assert_eq!(handed[50..53], [48_000, 48_960, 49_920], "no frame skipped");
-        assert_eq!(device.clock.laid, 2, "at the start and at the resume");
+        // Laid at the start and at the resume, which came four seconds late for the old line.
+        assert_eq!(device.clock.laid, [[0.0, 0.0], [1.02, 4000.0]]);
     }
 
     #[test]
@@ -359,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn a_device_whose_sayings_wander_is_followed_steadily_and_one_that_falls_behind_at_once() {
+    fn a_wandering_device_is_followed_steadily_and_one_that_falls_behind_once_it_says_so_twice() {
         let mut device = Device::playing(Clock::new(48_000, 4_800_000, 0));
         // Each saying is half a millisecond early or late.
         device.off_ns = vec![500_000, -500_000, -500_000, 500_000, 500_000, -500_000];
@@ -372,15 +396,37 @@ mod tests {
         }
         let wander = device.clock.wander_ms();
         assert!((0.4..0.6).contains(&wander), "wander of {wander} ms");
-        assert_eq!(device.clock.laid, 1, "one steady line all the while");
+        assert_eq!(device.clock.laid.len(), 1, "one steady line all the while");
 
         // The device stalls: from here on everything sounds 30 ms later than it would have.
+        // Its first late saying could be a stray; its second agrees with the first.
         device.off_ns = vec![30_000_000];
         let before = device.after(0.0).0;
-        let stalled = device.after(0.02).0;
-        assert!(stalled >= before && stalled < before + 0.02, "{stalled}");
+        let stalled = device.after(0.04).0;
+        assert!(stalled >= before && stalled < before + 0.04, "{stalled}");
         heard_s += 0.5 - 0.03;
-        assert!((device.after(0.48).0 - heard_s).abs() < 0.000_05);
-        assert_eq!(device.clock.laid, 2, "a new line where it fell behind");
+        assert!((device.after(0.46).0 - heard_s).abs() < 0.000_05);
+        let (laid, passed_over) = (device.clock.laid.len(), device.clock.passed_over.len());
+        assert_eq!((laid, passed_over), (2, 1), "a new line, one saying late");
+    }
+
+    #[test]
+    fn one_saying_far_from_the_line_neither_lays_it_afresh_nor_moves_song_time() {
+        for stray_ns in [5_000_000, -5_000_000] {
+            let mut device = Device::playing(Clock::new(48_000, 4_800_000, 0));
+            assert!(close(device.after(1.0).0, 0.96));
+            // One saying is 5 ms off, late or early. Those before and after it are true.
+            device.off_ns = vec![stray_ns];
+            assert!(close(device.after(0.02).0, 0.98), "at the stray saying");
+            device.off_ns = vec![0];
+            let mut heard_s = 0.98;
+            for _ in 0..100 {
+                heard_s += 0.007;
+                let heard = device.after(0.007).0;
+                assert!(close(heard, heard_s), "{heard} at {heard_s}");
+            }
+            assert_eq!(device.clock.laid.len(), 1, "one steady line all the while");
+            assert_eq!(device.clock.passed_over, [[1.02, stray_ns as f64 / 1e6]]);
+        }
     }
 }

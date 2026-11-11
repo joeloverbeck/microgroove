@@ -87,7 +87,7 @@ fn sky_fragment(in: SkyOut) -> @location(0) vec4<f32> {
 
 struct GroundOut {
     @builtin(position) position: vec4<f32>,
-    @location(0) place: vec3<f32>, // from the origin
+    @location(0) point: vec3<f32>, // of the ground, from the origin
     @location(1) normal: vec3<f32>,
     @location(2) paint: vec4<f32>, // rgb: the region's accent. a: the intensity of the song here.
 }
@@ -98,17 +98,17 @@ fn ground_vertex(
     @location(1) normal: vec3<f32>,
     @location(2) paint: vec4<f32>,
 ) -> GroundOut {
-    let place = position - moment.origin.xyz;
-    return GroundOut(moment.view * vec4<f32>(place, 1.0), place, normal, paint);
+    let point = position - moment.origin.xyz;
+    return GroundOut(moment.view * vec4<f32>(point, 1.0), point, normal, paint);
 }
 
 @fragment
 fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
-    let from_eye = in.place - moment.eye.xyz;
+    let from_eye = in.point - moment.eye.xyz;
     let range = length(from_eye);
     let toward = from_eye / range;
     let accent = in.paint.rgb;
-    let across = in.place.xz + moment.origin.xz;
+    let across = in.point.xz + moment.origin.xz;
 
     // Level ground lies wet, dark and smooth. Slopes are rough and grained, at a scale
     // finer than the ground's triangles; roughness too fine to draw fades out.
@@ -116,7 +116,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     let wet = smoothstep(0.86, 0.995, shape.y);
     let near = clamp(1.0 - range / 1500.0, 0.0, 1.0) * (1.0 - wet);
     // Height shifts the grain, so that it does not smear down a steep slope.
-    let rough = (across + in.place.y * vec2<f32>(1.3, 0.7)) / 7.0;
+    let rough = (across + in.point.y * vec2<f32>(1.3, 0.7)) / 7.0;
     let grain = noise(rough);
     let tilt = vec2<f32>(noise(rough + vec2<f32>(0.3, 0.0)), noise(rough + vec2<f32>(0.0, 0.3))) - grain;
     let normal = normalize(shape - vec3<f32>(tilt.x, 0.0, tilt.y) * 1.5 * near);
@@ -136,7 +136,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     // The land glows from within where the song is intense, whatever the light is now:
     // along broken seams at even heights, and in veins that wander over the slopes.
     // Seams and veins too fine to draw fade out.
-    let level = in.place.y / SEAM_M;
+    let level = in.point.y / SEAM_M;
     let fine = fwidth(level);
     let seam = (1.0 - smoothstep(0.02, 0.04 + fine, abs(fract(level) - 0.5)))
         * clamp(1.0 - 2.5 * fine, 0.0, 1.0)
@@ -149,7 +149,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
     // Each impulse in play is a ring of light running out over the ground from its lantern.
     for (var i = 0; i < i32(moment.right.w); i++) {
         let ring = moment.rings[i];
-        let off = (distance(in.place.xz, ring.xy) - ring.z) / (0.03 * ring.z + 0.5);
+        let off = (distance(in.point.xz, ring.xy) - ring.z) / (0.03 * ring.z + 0.5);
         colour += mix(accent, vec3<f32>(1.0), 0.5) * ring.w * RING * exp(-off * off);
     }
 
@@ -175,11 +175,11 @@ fn lantern_vertex(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
     );
     let corner = corners[index];
-    let place = lantern.xyz - moment.origin.xyz;
-    let range = length(place - moment.eye.xyz);
+    let foot = lantern.xyz - moment.origin.xyz;
+    let range = length(foot - moment.eye.xyz);
     // A lantern is never drawn smaller than a few pixels: it dims instead.
     let drawn = max(radius, range * 0.0016);
-    let centre = place
+    let centre = foot
         + drawn * (corner.x * normalize(moment.right.xyz) + (corner.y + 1.0) * normalize(moment.up.xyz));
     let shine = (0.25 + 0.75 * lantern.w) * (radius * radius) / (drawn * drawn) * exp(-range * moment.eye.w);
     return LanternOut(moment.view * vec4<f32>(centre, 1.0), corner, shine);

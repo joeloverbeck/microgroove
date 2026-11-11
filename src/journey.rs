@@ -50,8 +50,10 @@ pub struct Ridden {
     pub measured: Value,
     /// The last picture a silent self-launch showed, and its moment: a still to set
     /// beside the one the `still` command makes of the same song time.
-    pub last: Option<(Moment, Vec<u8>)>,
+    pub last: Option<(Moment, Result<Vec<u8>, String>)>,
     pub adapter: String,
+    /// Why the journey failed although it was ridden to its close and measured.
+    pub failure: Option<String>,
 }
 
 /// Ends the process outright once `limit` has passed, whatever the rest of it is doing.
@@ -134,8 +136,9 @@ struct Stage {
 
 /// What is noted of each picture shown: when it was begun, in seconds after the journey
 /// started to open; the song time then heard; how long it took to draw and hand over;
-/// and how long the display took to have room for it, both in ms.
-type Picture = (f64, f64, f64, f64);
+/// how long the display took to have room for it, both in ms; and whether the desktop
+/// asked for it.
+type Picture = (f64, f64, f64, f64, bool);
 
 /// What a journey notes of itself as it goes.
 #[derive(Default)]
@@ -184,7 +187,7 @@ impl Journey<'_> {
         let song = self.song.take().ok_or("the song is already playing")?;
         let gain = if self.silent { 0.0 } else { 1.0 };
         let playback = Playback::start(song, self.from_s, gain)?;
-        playback.heard().clock.nudge_ms = NUDGE_MS;
+        playback.shared().clock.nudge_ms = NUDGE_MS;
         Ok(Stage {
             playback,
             window,
@@ -199,8 +202,8 @@ impl Journey<'_> {
     /// What a key does, whether the listener presses it or a silent self-launch does.
     fn press(&mut self, key: KeyCode, event_loop: &ActiveEventLoop) {
         let Some(stage) = &self.stage else { return };
-        let mut heard = stage.playback.heard();
-        let clock = &mut heard.clock;
+        let mut shared = stage.playback.shared();
+        let clock = &mut shared.clock;
         match key {
             KeyCode::Escape | KeyCode::KeyQ => event_loop.exit(),
             KeyCode::Space => clock.paused = !clock.paused,
@@ -218,7 +221,7 @@ impl Journey<'_> {
 
     /// Draws the moment for the song time being heard, and shows it. The song time is
     /// read once the display has room for the picture, as late as it can be.
-    fn show(&mut self, event_loop: &ActiveEventLoop) {
+    fn show(&mut self, event_loop: &ActiveEventLoop, asked_for: bool) {
         let Some(stage) = &mut self.stage else { return };
         let asked = Instant::now();
         let room = match stage.screen.room(&stage.gpu) {
@@ -245,26 +248,29 @@ impl Journey<'_> {
             heard_s,
             began.elapsed().as_secs_f64() * 1e3,
             (began - asked).as_secs_f64() * 1e3,
+            asked_for,
         ));
         stage.last = Some(moment);
         stage.window.request_redraw();
         self.tick = began + TICK;
     }
 
-    /// Closes the journey and says what it measured.
-    fn close(&self, mut stage: Stage) -> Result<Ridden, String> {
-        if !self.in_sight {
-            return Err("the desktop never showed the window (is the screen on?)".to_string());
-        }
+    /// Closes the journey and says what it measured. A journey nobody could see is
+    /// measured like any other, and then fails.
+    fn close(&self, mut stage: Stage) -> Ridden {
+        let unseen = "the desktop never showed the window (is the screen on?)";
         let last = match stage.last.take() {
-            Some(moment) if self.silent => Some((moment, stage.picture.png(&stage.gpu)?)),
+            Some(moment) if self.silent => Some((moment, stage.picture.png(&stage.gpu))),
             _ => None,
         };
         let (_, _, ended) = stage.playback.now();
-        let nudge_ms = stage.playback.heard().clock.nudge_ms;
+        let nudge_ms = stage.playback.shared().clock.nudge_ms;
         let pictures = &self.log.pictures;
+        // Pacing is the time up to each picture the desktop asked for: one drawn unasked
+        // was drawn at the tick, not at the display's pace.
         let between_ms = pictures
             .windows(2)
+            .filter(|pair| pair[1].4)
             .map(|pair| (pair[1].0 - pair[0].0) * 1e3);
         let between_ms: Vec<f64> = between_ms.collect();
         // A picture is late when more than a refresh and a half passed since the last.
@@ -278,6 +284,7 @@ impl Journey<'_> {
         let size = stage.window.inner_size();
         let measured = json!({
             "silent": self.silent,
+            "window_shown": self.in_sight,
             "from_s": self.from_s,
             "ended": if ended { "the song ended" } else { "a key quit" },
             "nudge_ms": nudge_ms,
@@ -293,6 +300,7 @@ impl Journey<'_> {
                 "size": stage.picture.size,
                 "adapter": stage.gpu.adapter,
                 "shown": pictures.len(),
+                "drawn_unasked": pictures.iter().filter(|picture| !picture.4).count(),
                 "asked_for": self.log.asked_for,
                 "not_shown": self.log.not_shown,
                 "first_shown_s": pictures.first().map(|first| first.0 + first.2 / 1e3),
@@ -307,12 +315,13 @@ impl Journey<'_> {
             "audio": stage.playback.measured(),
             "pressed": self.log.pressed,
         });
-        Ok(Ridden {
+        Ridden {
             nudge_ms,
             measured,
             last,
             adapter: stage.gpu.adapter.clone(),
-        })
+            failure: (!self.in_sight).then(|| unseen.to_string()),
+        }
     }
 }
 
@@ -413,7 +422,7 @@ impl ApplicationHandler for Journey<'_> {
                 // when it has shown one: from then on the window is known to be in sight.
                 self.in_sight |= !self.log.pictures.is_empty();
                 self.log.asked_for += 1;
-                self.show(event_loop);
+                self.show(event_loop, true);
             }
             _ => {}
         }
@@ -441,7 +450,7 @@ impl ApplicationHandler for Journey<'_> {
         let now = Instant::now();
         if now >= self.tick {
             self.tick = now + TICK;
-            self.show(event_loop);
+            self.show(event_loop, false);
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.tick));
     }
@@ -451,7 +460,7 @@ impl ApplicationHandler for Journey<'_> {
         if let Some(stage) = self.stage.take()
             && self.outcome.is_none()
         {
-            self.outcome = Some(self.close(stage));
+            self.outcome = Some(Ok(self.close(stage)));
         }
     }
 }

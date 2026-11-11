@@ -313,16 +313,19 @@ fn finite(value: f64) -> Option<f64> {
 }
 
 /// The whole song's EBU R128 measurements, and its momentary loudness (LUFS over
-/// 0.4 s) around each slow step; silence reads as negative infinity.
+/// 0.4 s) around each slow step; silence reads as negative infinity. A mono file is
+/// measured as its one channel, as ffmpeg measures it.
 fn loudness(song: &Song, hop_s: f64) -> (Loudness, Vec<f32>) {
     let block = (hop_s * f64::from(song.sample_rate)).round() as usize;
-    let mut meter = EbuR128::new(2, song.sample_rate, Mode::I | Mode::LRA | Mode::SAMPLE_PEAK)
-        .expect("stereo at the file's sample rate is a valid meter configuration");
+    let channels = song.channels.len() as u32;
+    let mode = Mode::I | Mode::LRA | Mode::SAMPLE_PEAK;
+    let mut meter = EbuR128::new(channels, song.sample_rate, mode)
+        .expect("decode accepts only channel counts and sample rates the meter takes");
     let mut momentary = Vec::new();
-    for (left, right) in song.left().chunks(block).zip(song.right().chunks(block)) {
-        meter
-            .add_frames_planar_f32(&[left, right])
-            .expect("two channels of equal length");
+    for from in (0..song.frames()).step_by(block) {
+        let step = from..(from + block).min(song.frames());
+        let heard: Vec<&[f32]> = song.channels.iter().map(|c| &c[step.clone()]).collect();
+        meter.add_frames_planar_f32(&heard).expect("equal channels");
         momentary.push(meter.loudness_momentary().unwrap_or(f64::NEG_INFINITY) as f32);
     }
     // A reading covers the 0.4 s before it, so the one taken a step later is centred here.
@@ -330,7 +333,7 @@ fn loudness(song: &Song, hop_s: f64) -> (Loudness, Vec<f32>) {
     if let [.., last, carried] = momentary.as_mut_slice() {
         *carried = *last;
     }
-    let peak = (0..2)
+    let peak = (0..channels)
         .map(|channel| meter.sample_peak(channel).unwrap_or(0.0))
         .fold(0.0, f64::max);
     let loudness = Loudness {

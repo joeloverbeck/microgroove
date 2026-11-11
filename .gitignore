@@ -14,10 +14,11 @@ target/
 *.aac
 *.aiff
 
-# Derived, disposable output
+# Derived, disposable output. The program writes stills/ and captures/ under whatever
+# directory it is run from, so those two are ignored at any depth.
 /cache/
-/stills/
-/captures/
+stills/
+captures/
 /logs/
 
 # Local configuration and credentials

@@ -74,33 +74,41 @@ fn measured_loudness_agrees_with_ffmpegs_ebu_r128_reading() {
     let dir = scratch("reference-loudness");
     let wav = dir.join("varied.wav");
     varied_song(&wav);
-    let Some((_, report)) = ffmpeg(
-        &["-nostats"],
+    // The same song with its two channels mixed into one, by ffmpeg.
+    let mono = dir.join("mono.wav");
+    let mixed = ffmpeg(
+        &["-v", "error", "-y"],
         &wav,
-        &["-filter_complex", "ebur128=peak=sample", "-f", "null", "-"],
-    ) else {
+        &["-ac", "1", mono.to_str().unwrap()],
+    );
+    if mixed.is_none() {
         return skip(
             "measured_loudness_agrees_with_ffmpegs_ebu_r128_reading",
             "ffmpeg is not installed",
         );
-    };
-    let summary = &report[report.rfind("Summary:").expect("ffmpeg printed no summary")..];
-    let reading = |label: &str| -> f64 {
-        let rest = &summary[summary.find(label).unwrap() + label.len()..];
-        rest.split_whitespace().next().unwrap().parse().unwrap()
-    };
-    let heard = numbers(&wav, &dir);
-    let loudness = &heard["loudness"];
-    assert!(
-        (f(&loudness["integrated_lufs"]) - reading("I:")).abs() <= 0.1,
-        "{loudness} against {summary}"
-    );
-    assert!(
-        (f(&loudness["range_lu"]) - reading("LRA:")).abs() <= 0.5,
-        "{loudness} against {summary}"
-    );
-    assert!(
-        (f(&loudness["sample_peak_dbfs"]) - reading("Peak:")).abs() <= 0.1,
-        "{loudness} against {summary}"
-    );
+    }
+    for (song, channels) in [(&wav, 2), (&mono, 1)] {
+        let measure = ["-filter_complex", "ebur128=peak=sample", "-f", "null", "-"];
+        let (_, report) = ffmpeg(&["-nostats"], song, &measure).unwrap();
+        let summary = &report[report.rfind("Summary:").expect("ffmpeg printed no summary")..];
+        let reading = |label: &str| -> f64 {
+            let rest = &summary[summary.find(label).unwrap() + label.len()..];
+            rest.split_whitespace().next().unwrap().parse().unwrap()
+        };
+        let heard = numbers(song, &dir);
+        assert_eq!(heard["channels"], channels);
+        let loudness = &heard["loudness"];
+        assert!(
+            (f(&loudness["integrated_lufs"]) - reading("I:")).abs() <= 0.1,
+            "{loudness} against {summary}"
+        );
+        assert!(
+            (f(&loudness["range_lu"]) - reading("LRA:")).abs() <= 0.5,
+            "{loudness} against {summary}"
+        );
+        assert!(
+            (f(&loudness["sample_peak_dbfs"]) - reading("Peak:")).abs() <= 0.1,
+            "{loudness} against {summary}"
+        );
+    }
 }

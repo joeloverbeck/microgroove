@@ -31,6 +31,9 @@ const ORIGIN_GRID_M: f64 = 256.0;
 
 pub type Size = (u32, u32);
 
+/// The most bytes the GPU takes in one buffer: the device is asked for the default limits.
+pub const MOST_BUFFER_BYTES: u64 = wgpu::Limits::defaults().max_buffer_size;
+
 /// The GPU, reached with no window and no display.
 pub struct Gpu {
     pub device: wgpu::Device,

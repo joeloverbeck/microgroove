@@ -55,6 +55,18 @@ fn one_command_writes_a_still_and_the_numbers_of_its_moment_with_no_display() {
     assert!(moment["impulses"].is_array(), "{moment}");
 }
 
+/// `1:-50` is not ten seconds: the command is not understood, and no file is looked for.
+#[test]
+fn a_song_time_with_seconds_below_zero_is_not_a_song_time() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_microgroove"))
+        .args(["still", "no-such-song.wav", "--at", "1:-50"])
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{message}");
+    assert!(message.starts_with("usage:"), "{message}");
+}
+
 #[test]
 fn the_same_moment_gives_the_same_still_on_every_run_and_in_whatever_order() {
     let dir = scratch("still-determinism");

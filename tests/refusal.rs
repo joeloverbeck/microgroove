@@ -93,6 +93,38 @@ fn an_unsupported_format_is_refused() {
     assert_refused(&output, &dir, "not a supported audio format");
 }
 
+/// Analysis cannot handle every sample rate a file can have: one too low for the bands
+/// of its spectrum to fit, one too low for its loudness meter to weigh, and one beyond
+/// what that meter takes.
+#[test]
+fn a_sample_rate_analysis_cannot_handle_is_refused() {
+    let dir = scratch("refusal-sample-rate");
+    for rate in [800, 2_000, 3_000_000] {
+        let song = dir.join(format!("{rate}-hz.wav"));
+        let tone = common::tone(0.5, 440.0, 0.5);
+        common::write_wav_at(&song, rate, &tone, &tone);
+        let output = run_timeline(&song, &dir);
+        assert_refused(&output, &dir, &format!("its sample rate is {rate} Hz"));
+    }
+}
+
+/// The ground of a place goes to the GPU whole, and the GPU holds only so much of it:
+/// forty minutes of steadily loud noise run further than that.
+#[test]
+fn a_song_too_long_for_the_place_to_hold_is_refused() {
+    let dir = scratch("refusal-too-long");
+    let song = dir.join("forty-minutes.wav");
+    let noise = common::noise(200.0, 0.3);
+    common::write_wav_at(&song, 4_000, &noise, &noise);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_microgroove"))
+        .args(["still", "--at", "1", "--out"])
+        .args([&dir, &song])
+        .output()
+        .unwrap();
+    assert_refused(&output, &dir, "cannot hold a song this long yet, only ");
+    assert!(!dir.join("still-0001.000.png").exists(), "no still is made");
+}
+
 #[test]
 fn a_file_that_is_not_audio_is_refused() {
     let dir = scratch("refusal-not-audio");

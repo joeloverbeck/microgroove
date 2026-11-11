@@ -27,7 +27,8 @@ const USAGE: &str = "usage: microgroove [ride] <audio file> [--size <width>x<hei
        microgroove run <audio file> [--from <song time>] [--to <song time>] [--rate <moments a second>] [--size <width>x<height>] [--out <directory>]
 a song time is seconds (95.5) or minutes and seconds (1:35.5)";
 
-/// Where output goes unless `--out` says otherwise; both git-ignored in this repository.
+/// Where output goes unless `--out` says otherwise: under the current directory, and
+/// git-ignored anywhere in this repository.
 const CAPTURES: &str = "captures";
 const STILLS: &str = "stills";
 /// The display a journey is ridden on: a picture is this large, and a run draws this many
@@ -162,8 +163,9 @@ fn parse(args: Vec<OsString>, options: &[&str]) -> Option<Request> {
 /// Seconds (`95.5`) or minutes and seconds (`1:35.5`).
 fn song_time(text: &str) -> Option<f64> {
     let (minutes, seconds) = text.split_once(':').unwrap_or(("0", text));
-    let time = f64::from(minutes.parse::<u32>().ok()?) * 60.0 + seconds.parse::<f64>().ok()?;
-    (time.is_finite() && time >= 0.0).then_some(time)
+    let seconds = seconds.parse::<f64>().ok()?;
+    let time = f64::from(minutes.parse::<u32>().ok()?) * 60.0 + seconds;
+    (time.is_finite() && seconds >= 0.0).then_some(time)
 }
 
 /// `<width>x<height>` in pixels.
@@ -250,6 +252,12 @@ fn place_of(request: &Request) -> Result<(decode::Song, f64, Place), String> {
         ));
     }
     let place = Place::of(&analysis, end_s);
+    if let Some(holds_s) = place.outgrows(render::MOST_BUFFER_BYTES) {
+        let (song, minutes) = (request.song.display(), holds_s / 60.0);
+        return Err(format!(
+            "refused {song}: the place cannot hold a song this long yet, only {minutes:.0} minutes of it"
+        ));
+    }
     Ok((song, end_s, place))
 }
 
@@ -269,25 +277,33 @@ fn journey(request: &Request, silent: bool) -> Result<(), String> {
     let size = request.size.unwrap_or(DISPLAY);
     let from_s = request.from.unwrap_or(0.0);
     let ridden = journey::ride(song, &place, size, from_s, silent)?;
-    let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));
-    let name = if silent { "self-launch" } else { "journey" };
-    if let Some((moment, picture)) = ridden.last {
-        let numbers = StillNumbers {
-            moment: &moment,
-            place: place.summary(),
-            size,
-            adapter: &ridden.adapter,
-        };
-        write(&out, &format!("{name}-last.png"), picture)?;
-        write(&out, &format!("{name}-last.json"), json(&numbers, true)?)?;
-    }
-    let measured = json(&ridden.measured, true)?;
-    if silent {
-        print!("{}", String::from_utf8_lossy(&measured));
-    }
-    write(&out, &format!("{name}.json"), measured)?;
+    // Said before anything that can fail.
     println!("nudge at exit: {:+} ms", ridden.nudge_ms);
-    Ok(())
+    let name = if silent { "self-launch" } else { "journey" };
+    let record = || -> Result<(), String> {
+        let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));
+        let measured = json(&ridden.measured, true)?;
+        if silent {
+            print!("{}", String::from_utf8_lossy(&measured));
+        }
+        write(&out, &format!("{name}.json"), measured)?;
+        if let Some((moment, picture)) = ridden.last {
+            let numbers = StillNumbers {
+                moment: &moment,
+                place: place.summary(),
+                size,
+                adapter: &ridden.adapter,
+            };
+            write(&out, &format!("{name}-last.png"), picture?)?;
+            write(&out, &format!("{name}-last.json"), json(&numbers, true)?)?;
+        }
+        Ok(())
+    };
+    // A journey that was ridden does not fail because its record could not be written.
+    if let Err(warning) = record() {
+        eprintln!("microgroove: warning: {warning}");
+    }
+    ridden.failure.map_or(Ok(()), Err)
 }
 
 /// The place made from a file, on a GPU with no display, with a picture to draw it into.

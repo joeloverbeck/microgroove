@@ -104,6 +104,11 @@ pub const RATE: u32 = 48_000;
 
 /// Writes interleaved stereo samples in [-1, 1] as a 16-bit PCM WAV file.
 pub fn write_wav(path: &Path, left: &[f32], right: &[f32]) {
+    write_wav_at(path, RATE, left, right);
+}
+
+/// The same, for samples at any number a second.
+pub fn write_wav_at(path: &Path, rate: u32, left: &[f32], right: &[f32]) {
     assert_eq!(left.len(), right.len());
     let data_len = (left.len() * 4) as u32;
     let mut bytes = Vec::with_capacity(44 + data_len as usize);
@@ -113,8 +118,8 @@ pub fn write_wav(path: &Path, left: &[f32], right: &[f32]) {
     bytes.extend_from_slice(&16u32.to_le_bytes());
     bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
     bytes.extend_from_slice(&2u16.to_le_bytes()); // channels
-    bytes.extend_from_slice(&RATE.to_le_bytes());
-    bytes.extend_from_slice(&(RATE * 4).to_le_bytes());
+    bytes.extend_from_slice(&rate.to_le_bytes());
+    bytes.extend_from_slice(&(rate * 4).to_le_bytes());
     bytes.extend_from_slice(&4u16.to_le_bytes());
     bytes.extend_from_slice(&16u16.to_le_bytes());
     bytes.extend_from_slice(b"data");

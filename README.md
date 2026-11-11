@@ -2,7 +2,7 @@
 
 Give it a song; it carries you through a place made from that song.
 
-`microgroove` is a personal Rust program at the foundation stage. It will analyse a whole local audio file before playing it, then fly the listener, hands off, through a dream landscape whose geography is the song's structure and whose future lies visibly ahead. Under magnification a record's groove is a canyon whose two walls are the left and right channels; the name takes that literally.
+`microgroove` is a personal Rust program. It analyses a whole local audio file before playing it, then flies the listener, hands off, through a dream landscape whose geography is the song's structure and whose future lies visibly ahead. Under magnification a record's groove is a canyon whose two walls are the left and right channels; the name takes that literally.
 
 **Status (2026-11-11):** an experiment in progress on the `first-journey` branch. The program decodes one audio file, analyses it, builds a place from the analysis, and rides it: full screen, with the song playing. It also writes a timeline of what it heard and a still of any moment of the place. The journey has not yet been seen on a display, by the owner or by a measurement, and the owner has accepted nothing.
 
@@ -29,9 +29,11 @@ The program analyses the whole file, then opens a borderless full-screen window 
 | Right arrow | shows the picture 5 ms earlier against the audio; press it when what you see lands after what you hear |
 | Left arrow | shows the picture 5 ms later |
 
-As it ends, a journey prints the nudge in use (`nudge at exit: +10 ms`) and writes what it measured of itself to `captures/journey.json`: the time between pictures, how steadily song time ran, the keys pressed, and anything the audio device reported. `--size <width>x<height>` draws the picture smaller than the display and scales it up; `--out <directory>` writes the measurements somewhere else.
+As it ends, a journey prints the nudge in use (`nudge at exit: +10 ms`) and then writes what it measured of itself to `captures/journey.json`: the time between pictures, how steadily song time ran, the keys pressed, and anything the audio device reported. If that file cannot be written the journey says so and still ends well. `--size <width>x<height>` draws the picture smaller than the display and scales it up; `--out <directory>` writes the measurements somewhere else.
 
-The program does not resample: it asks the audio device for the file's own sample rate. With no screen attached and switched on, a journey is refused before a window or the audio device is opened.
+`captures/` and `stills/`, here and below, are made under the directory the program is run from. Inside this repository both are git-ignored, at any depth.
+
+The program does not resample: it asks the audio device for the file's own sample rate. With no screen attached and switched on, a journey is refused before a window or the audio device is opened. A journey whose window the desktop never showed still writes its measurements, and then fails.
 
 On the owner's machine the song's path lives in `MICROGROOVE_SONG` in the git-ignored `.env` (see `.env.example`). The program never reads `.env`; it takes the path on the command line. Load the variable into the shell first:
 
@@ -48,7 +50,7 @@ cargo run --release -- "$MICROGROOVE_SONG"
 cargo run --release -- self-launch "$MICROGROOVE_SONG"
 ```
 
-This is the same journey with every sample multiplied by zero, so it makes no sound. It opens the real window and the real audio device, presses its own keys (both nudges, pause, resume, quit), quits by itself after about ten seconds, and is ended outright at 15 seconds if it has not. It takes over the screen while it runs. It prints its measurements and writes them to `captures/self-launch.json`, with the last picture it showed as `captures/self-launch-last.png` and that moment's numbers beside it; a still made with `still --at <that song time>` is the same moment drawn with no display. `--from <song time>` starts it somewhere other than the beginning.
+This is the same journey with every sample multiplied by zero, so it makes no sound. It opens the real window and the real audio device, presses its own keys (both nudges, pause, resume, quit), quits by itself after about ten seconds, and is ended outright at 15 seconds if it has not. It takes over the screen while it runs. It prints its measurements and writes them to `captures/self-launch.json`, with the last picture it showed as `captures/self-launch-last.png` and that moment's numbers beside it; a still made with `still --at <that song time>` is the same moment drawn with no display. `--from <song time>` starts it somewhere other than the beginning. Its measurements say whether the window was ever shown, how many pictures were drawn without the desktop asking (they are left out of the time between pictures), and each time the audio clock laid its steady line afresh or passed over a stray saying of the device, with the song time and the size in ms.
 
 A self-launch is not a viewing: nobody judges it.
 
@@ -60,7 +62,7 @@ Make a timeline, without a display:
 cargo run --release -- timeline /path/to/song.flac
 ```
 
-This writes `captures/timeline.png`, a picture of what analysis heard over song time, and `captures/analysis.json`, the same as numbers: the intensity curve, the onsets, the pulse and where it is trusted, the section boundaries with their confidence, the fingerprint, and what differs between the left and right channels. `--out <directory>` writes them somewhere else. `captures/` is git-ignored; both files are disposable and can be made again from the audio. FLAC, WAV and Ogg Vorbis are read. A file that is missing, unreadable or in another format is refused with one plain line and a non-zero exit.
+This writes `captures/timeline.png`, a picture of what analysis heard over song time, and `captures/analysis.json`, the same as numbers: the intensity curve, the onsets, the pulse and where it is trusted, the section boundaries with their confidence, the fingerprint, and what differs between the left and right channels. `--out <directory>` writes them somewhere else. Both files are disposable and can be made again from the audio. FLAC, WAV and Ogg Vorbis are read. A file that is missing, unreadable or in another format is refused with one plain line and a non-zero exit; so is one with more than two channels, or with a sample rate analysis cannot handle (below 3,364 Hz or above 2,822,400 Hz).
 
 Make a still of one or more moments, without a display:
 
@@ -68,7 +70,7 @@ Make a still of one or more moments, without a display:
 cargo run --release -- still /path/to/song.flac --at 1:50 --at 3:25.5
 ```
 
-A song time is seconds (`95.5`) or minutes and seconds (`1:35.5`). For each moment this writes `stills/still-<seconds>.png` and, beside it, `still-<seconds>.json` with the numbers behind the moment: position on the route, the region, the camera's pose, the light level and the impulses in play. A still is 3840×2160 unless `--size <width>x<height>` says otherwise, and `--out <directory>` writes somewhere else. A moment depends only on the audio and the song time, so the same moment gives the same still on every run, in whatever order stills are asked for. `stills/` is git-ignored.
+A song time is seconds (`95.5`) or minutes and seconds (`1:35.5`). For each moment this writes `stills/still-<seconds>.png` and, beside it, `still-<seconds>.json` with the numbers behind the moment: position on the route, the region, the camera's pose, the light level and the impulses in play. A still is 3840×2160 unless `--size <width>x<height>` says otherwise, and `--out <directory>` writes somewhere else. A moment depends only on the audio and the song time, so the same moment gives the same still on every run, in whatever order stills are asked for. A song whose route runs further than the GPU can hold ground for, about 340 km today, is refused with one line that says how many minutes of it the place can hold.
 
 Measure a run of consecutive moments, without a display:
 

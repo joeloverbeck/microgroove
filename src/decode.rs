@@ -75,6 +75,10 @@ fn refuse<T>(reason: impl Into<String>) -> Result<T, Refusal> {
 }
 
 const UNSUPPORTED: &str = "it is not a supported audio format (FLAC, WAV or Ogg Vorbis)";
+/// The sample rates analysis can handle. Its loudness meter weighs the sound with a
+/// filter centred near 1,682 Hz, which takes a sample rate of more than twice that, and
+/// accepts none above 2,822,400 Hz. (Below 1,650 Hz the spectrum's bands do not fit either.)
+const SAMPLE_RATES: std::ops::RangeInclusive<u32> = 3_364..=2_822_400;
 
 pub fn decode(path: &Path) -> Result<Song, Refusal> {
     let file = match File::open(path) {
@@ -134,6 +138,12 @@ pub fn decode(path: &Path) -> Result<Song, Refusal> {
             if count == 0 || count > 2 {
                 return refuse(format!(
                     "it has {count} channels; only mono and stereo are supported"
+                ));
+            }
+            if !SAMPLE_RATES.contains(&rate) {
+                let (least, most) = SAMPLE_RATES.into_inner();
+                return refuse(format!(
+                    "its sample rate is {rate} Hz; analysis handles {least} Hz to {most} Hz"
                 ));
             }
             sample_rate = rate;

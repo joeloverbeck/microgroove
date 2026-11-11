@@ -443,11 +443,24 @@ impl Place {
         character
     }
 
+    /// Rows the ground is laid in.
+    fn rows(&self) -> usize {
+        let length = self.distance_at(self.duration_s);
+        ((BEHIND_M + length + BEYOND_M) / ROW_M).ceil() as usize + 1
+    }
+
+    /// The ground goes to the GPU whole, in one buffer. None where it fits in `bytes`;
+    /// otherwise the song time by which the route has run as far as ground can be laid.
+    pub fn outgrows(&self, bytes: u64) -> Option<f64> {
+        let rows = bytes as usize / (4 * VERTEX_FLOATS * COLUMNS);
+        let route_m = rows.saturating_sub(1) as f64 * ROW_M - BEHIND_M - BEYOND_M;
+        (self.rows() > rows).then(|| self.time_at(route_m))
+    }
+
     /// Builds the ground of the whole place: a floor along the route that widens with
     /// intensity, and land to either side that rises higher the harder the song pushes.
     pub fn ground(&self) -> Ground {
-        let length = self.distance_at(self.duration_s);
-        let rows = ((BEHIND_M + length + BEYOND_M) / ROW_M).ceil() as usize + 1;
+        let rows = self.rows();
         let mut positions = Vec::with_capacity(rows * COLUMNS);
         let mut paint = Vec::with_capacity(rows);
         for row in 0..rows {
