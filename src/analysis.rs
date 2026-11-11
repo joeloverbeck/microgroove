@@ -24,7 +24,8 @@ pub struct Analysis {
     pub pulse: Pulse,
     /// The section boundaries analysis trusts, in song order.
     pub boundaries: Vec<Boundary>,
-    /// How much the music changes at each instant: what the boundaries are found in.
+    /// How much the music changes at each instant, heard close up: its peaks are the
+    /// changes among which the boundaries are trusted.
     pub change: Curve,
     /// The stretches between the boundaries, covering the whole song.
     pub sections: Vec<Section>,
@@ -117,8 +118,7 @@ pub fn analyse(song: &Song) -> Analysis {
     let (loudness, momentary) = loudness(song, hop_s);
     let intensity = intensity(&momentary, hop_s);
     let band_levels = band_levels(&spectrum, hop_s, stereo.left.len());
-    let change = sections::change(&band_levels, hop_s);
-    let boundaries = sections::boundaries(&change, hop_s);
+    let (change, boundaries) = sections::hear(&band_levels, hop_s);
 
     let onset_rate = |start_s: f64, end_s: f64| {
         let within = onsets

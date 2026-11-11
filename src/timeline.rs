@@ -217,13 +217,9 @@ pub fn draw(analysis: &Analysis, duration_s: f64) -> Vec<u8> {
         let change = at(&analysis.change.values, hop_s, column) / (4.0 * BOUNDARY_TRUST);
         let bar = ((change * 100.0).round() as usize).min(100);
         canvas.fill(LEFT + column, lane_tops[5] + 100 - bar, 1, bar, VIOLET);
-        if column % 6 < 3 {
-            canvas.fill(LEFT + column, lane_tops[5] + 75, 1, 1, TEXT); // the change at which a boundary is trusted
-        }
     }
     canvas.text(LEFT + 4, lane_tops[2] + 4, "LEFT", MUTED);
     canvas.text(LEFT + 4, lane_tops[2] + 100 - 18, "RIGHT", MUTED);
-    canvas.text(LEFT + 4, lane_tops[5] + 75 - 18, "TRUSTED ABOVE", MUTED);
 
     let strongest = analysis
         .onsets

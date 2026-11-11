@@ -114,6 +114,35 @@ fn silence_followed_by_noise_gives_exactly_one_section_boundary_where_the_noise_
     assert_eq!(starts, vec![0.0, boundaries[0]]);
 }
 
+/// A change is trusted when it lasts: the same step in level gives a boundary where the
+/// sound stays changed, and none where it goes back five seconds later.
+#[test]
+fn a_change_that_stays_gives_a_boundary_and_the_same_change_soon_undone_gives_none() {
+    let dir = scratch("synthetic-lasting-change");
+    let (quiet, loud) = (0.2, 0.2 * 10f32.powf(3.7 / 20.0)); // 3.7 dB apart
+    let stays = [common::noise(20.0, quiet), common::noise(25.0, loud)].concat();
+    let undone = [
+        common::noise(20.0, quiet),
+        common::noise(5.0, loud),
+        common::noise(20.0, quiet),
+    ]
+    .concat();
+
+    let song = dir.join("stays.wav");
+    write_wav(&song, &stays, &stays);
+    let boundaries = common::times(&numbers(&song, &dir)["boundaries"]);
+    assert_eq!(boundaries.len(), 1, "a step that stays: {boundaries:?}");
+    assert_close(boundaries[0], 20.0, 0.25, "boundary time");
+
+    let song = dir.join("undone.wav");
+    write_wav(&song, &undone, &undone);
+    let boundaries = common::times(&numbers(&song, &dir)["boundaries"]);
+    assert!(
+        boundaries.is_empty(),
+        "a step undone five seconds later: {boundaries:?}"
+    );
+}
+
 /// The valid no-match outcome: nothing is found, so nothing is reported.
 #[test]
 fn a_steady_tone_gives_no_onsets_no_boundary_and_no_pulse() {
