@@ -515,49 +515,53 @@ impl Screen {
 
     /// The window has a new size, in pixels.
     pub fn resize(&mut self, gpu: &Gpu, size: Size) {
-        if size.0 > 0 && size.1 > 0 {
+        if size.0 > 0 && size.1 > 0 && size != (self.config.width, self.config.height) {
             (self.config.width, self.config.height) = size;
             self.surface.configure(&gpu.device, &self.config);
         }
     }
 
+    /// Room for the next picture, waiting for it if the display is still busy with the
+    /// pictures before. None when the display has no room this time.
+    pub fn room(&self, gpu: &Gpu) -> Result<Option<wgpu::SurfaceTexture>, String> {
+        use wgpu::CurrentSurfaceTexture as Room;
+        match self.surface.get_current_texture() {
+            Room::Success(room) => Ok(Some(room)),
+            Room::Timeout | Room::Occluded => Ok(None),
+            // The window changed under the surface. Stale room must go before the
+            // surface is set up again.
+            Room::Suboptimal(stale) => {
+                drop(stale);
+                self.surface.configure(&gpu.device, &self.config);
+                Ok(None)
+            }
+            Room::Outdated => {
+                self.surface.configure(&gpu.device, &self.config);
+                Ok(None)
+            }
+            Room::Lost | Room::Validation => Err("the display was lost".to_string()),
+        }
+    }
+
     /// Draws a moment into `picture` as a still is drawn, and shows it in the window.
-    /// `about_to_show` is called just before the picture is handed to the display. False
-    /// when the display had no room for a picture this time.
+    /// `about_to_show` is called just before the picture is handed to the display.
     pub fn show(
         &self,
         gpu: &Gpu,
         renderer: &Renderer,
         picture: &Still,
         moment: &Moment,
+        room: wgpu::SurfaceTexture,
         about_to_show: impl FnOnce(),
-    ) -> Result<bool, String> {
-        use wgpu::CurrentSurfaceTexture as Room;
-        let frame = match self.surface.get_current_texture() {
-            Room::Success(frame) => frame,
-            Room::Timeout | Room::Occluded => return Ok(false),
-            // The window changed under the surface. A stale frame must go before the
-            // surface is set up again.
-            Room::Suboptimal(stale) => {
-                drop(stale);
-                self.surface.configure(&gpu.device, &self.config);
-                return Ok(false);
-            }
-            Room::Outdated => {
-                self.surface.configure(&gpu.device, &self.config);
-                return Ok(false);
-            }
-            Room::Lost | Room::Validation => return Err("the display was lost".to_string()),
-        };
+    ) {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         renderer.draw(&gpu.queue, &mut encoder, &picture.view, moment);
-        let shown = frame.texture.create_view(&Default::default());
+        let shown = room.texture.create_view(&Default::default());
         self.copy
             .copy(&gpu.device, &mut encoder, &picture.view, &shown);
         gpu.queue.submit([encoder.finish()]);
         about_to_show();
-        gpu.queue.present(frame);
-        Ok(true)
+        gpu.queue.present(room);
     }
 }
 

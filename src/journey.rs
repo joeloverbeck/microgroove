@@ -91,6 +91,7 @@ pub fn ride(
         song: Some(song),
         opened,
         tick: opened,
+        in_sight: false,
         stage: None,
         outcome: None,
         log: Log::default(),
@@ -110,8 +111,10 @@ struct Journey<'a> {
     /// The song, until the audio device takes it.
     song: Option<Song>,
     opened: Instant,
-    /// When a picture is next asked for if none has asked for it.
+    /// When a picture is next drawn unasked, if the desktop has asked for none by then.
     tick: Instant,
+    /// Whether the desktop has shown a picture: a journey nobody could see is a failure.
+    in_sight: bool,
     stage: Option<Stage>,
     outcome: Option<Result<Ridden, String>>,
     log: Log,
@@ -129,13 +132,17 @@ struct Stage {
     last: Option<Moment>,
 }
 
+/// What is noted of each picture shown: when it was begun, in seconds after the journey
+/// started to open; the song time then heard; how long it took to draw and hand over;
+/// and how long the display took to have room for it, both in ms.
+type Picture = (f64, f64, f64, f64);
+
 /// What a journey notes of itself as it goes.
 #[derive(Default)]
 struct Log {
-    /// For each picture shown: when it was begun, in seconds after the journey started
-    /// to open; the song time then heard; and how long it took to draw and hand over, in ms.
-    pictures: Vec<(f64, f64, f64)>,
-    /// Times the display had no room for a picture.
+    pictures: Vec<Picture>,
+    /// Times the desktop asked for a picture, and times the display had no room for one.
+    asked_for: usize,
     not_shown: usize,
     /// The keys pressed, with what each left behind.
     pressed: Vec<Value>,
@@ -143,11 +150,18 @@ struct Log {
     scripted: usize,
     /// The window as it opened, and when everything was ready to play.
     opening: Value,
-    had_focus: bool,
+    /// What the desktop told the window since: its size, its scale, whether it has the keys.
+    told: Vec<Value>,
 }
 
 impl Journey<'_> {
     fn open(&mut self, event_loop: &ActiveEventLoop) -> Result<Stage, String> {
+        // With no screen attached the desktop takes a window and never shows it, so
+        // this is refused before a window or the audio device is opened.
+        if event_loop.available_monitors().next().is_none() {
+            let reason = "the desktop has no screen attached and switched on";
+            return Err(format!("there is no display to ride on ({reason})"));
+        }
         // Borderless: exclusive full screen does nothing under Wayland.
         let attributes = Window::default_attributes()
             .with_title("microgroove")
@@ -163,12 +177,8 @@ impl Journey<'_> {
         let (gpu, screen) = Screen::open(instance, window.clone(), opened.into())?;
         let renderer = Renderer::new(&gpu.device, FORMAT, self.size, self.place);
         let picture = Still::new(&gpu.device, self.size);
-        let refresh = window
-            .current_monitor()
-            .and_then(|on| on.refresh_rate_millihertz());
         self.log.opening = json!({
             "window_size": [opened.width, opened.height],
-            "display_millihertz": refresh,
             "ready_s": self.opened.elapsed().as_secs_f64(),
         });
         let song = self.song.take().ok_or("the song is already playing")?;
@@ -206,37 +216,46 @@ impl Journey<'_> {
         }));
     }
 
-    /// Draws the moment for the song time being heard, and shows it.
+    /// Draws the moment for the song time being heard, and shows it. The song time is
+    /// read once the display has room for the picture, as late as it can be.
     fn show(&mut self, event_loop: &ActiveEventLoop) {
         let Some(stage) = &mut self.stage else { return };
+        let asked = Instant::now();
+        let room = match stage.screen.room(&stage.gpu) {
+            Ok(Some(room)) => room,
+            // Asked for again at the next tick.
+            Ok(None) => return self.log.not_shown += 1,
+            Err(failure) => {
+                self.outcome = Some(Err(failure));
+                return event_loop.exit();
+            }
+        };
         let began = Instant::now();
         let (heard_s, shown_s, _) = stage.playback.now();
         let moment = self.place.moment(shown_s);
-        // Telling the window first is what paces pictures to the display's refreshes.
+        // Telling the window first is what has the desktop ask for the next picture
+        // when it has shown this one: one picture for each refresh of the display.
         let about_to_show = || stage.window.pre_present_notify();
         let (gpu, renderer, picture) = (&stage.gpu, &stage.renderer, &stage.picture);
-        match stage
+        stage
             .screen
-            .show(gpu, renderer, picture, &moment, about_to_show)
-        {
-            Ok(true) => {
-                let at_s = (began - self.opened).as_secs_f64();
-                let took_ms = began.elapsed().as_secs_f64() * 1e3;
-                self.log.pictures.push((at_s, heard_s, took_ms));
-                stage.last = Some(moment);
-                stage.window.request_redraw();
-            }
-            // Asked for again at the next tick.
-            Ok(false) => self.log.not_shown += 1,
-            Err(failure) => {
-                self.outcome = Some(Err(failure));
-                event_loop.exit();
-            }
-        }
+            .show(gpu, renderer, picture, &moment, room, about_to_show);
+        self.log.pictures.push((
+            (began - self.opened).as_secs_f64(),
+            heard_s,
+            began.elapsed().as_secs_f64() * 1e3,
+            (began - asked).as_secs_f64() * 1e3,
+        ));
+        stage.last = Some(moment);
+        stage.window.request_redraw();
+        self.tick = began + TICK;
     }
 
     /// Closes the journey and says what it measured.
     fn close(&self, mut stage: Stage) -> Result<Ridden, String> {
+        if !self.in_sight {
+            return Err("the desktop never showed the window (is the screen on?)".to_string());
+        }
         let last = match stage.last.take() {
             Some(moment) if self.silent => Some((moment, stage.picture.png(&stage.gpu)?)),
             _ => None,
@@ -249,9 +268,9 @@ impl Journey<'_> {
             .map(|pair| (pair[1].0 - pair[0].0) * 1e3);
         let between_ms: Vec<f64> = between_ms.collect();
         // A picture is late when more than a refresh and a half passed since the last.
-        let refresh_ms = self.log.opening["display_millihertz"]
-            .as_f64()
-            .map(|millihertz| 1e6 / millihertz);
+        let refresh = stage.window.current_monitor();
+        let refresh = refresh.and_then(|display| display.refresh_rate_millihertz());
+        let refresh_ms = refresh.map(|millihertz| 1e6 / f64::from(millihertz));
         let late = refresh_ms.map(|refresh_ms| {
             let late = |gap_ms: &&f64| **gap_ms > 1.5 * refresh_ms;
             between_ms.iter().filter(late).count()
@@ -266,7 +285,7 @@ impl Journey<'_> {
             "window": {
                 "size": [size.width, size.height],
                 "scale": stage.window.scale_factor(),
-                "had_focus": self.log.had_focus,
+                "told": self.log.told,
                 "surface": format!("{:?}", stage.screen.config.format),
                 "presenting": format!("{:?}", stage.screen.config.present_mode),
             },
@@ -274,12 +293,15 @@ impl Journey<'_> {
                 "size": stage.picture.size,
                 "adapter": stage.gpu.adapter,
                 "shown": pictures.len(),
+                "asked_for": self.log.asked_for,
                 "not_shown": self.log.not_shown,
                 "first_shown_s": pictures.first().map(|first| first.0 + first.2 / 1e3),
                 "between_ms": crate::spread(between_ms),
                 "refresh_ms": refresh_ms,
                 "late": late,
                 "drawing_ms": crate::spread(pictures.iter().map(|picture| picture.2).collect()),
+                "waiting_for_room_ms":
+                    crate::spread(pictures.iter().map(|picture| picture.3).collect()),
             },
             "song_time": steady_stretches(pictures),
             "audio": stage.playback.measured(),
@@ -297,7 +319,7 @@ impl Journey<'_> {
 /// Song time against the system clock, over each stretch in which every picture heard
 /// more of the song than the picture before it: how many seconds of song passed in a
 /// second, and how far song time stood from that steady line.
-fn steady_stretches(pictures: &[(f64, f64, f64)]) -> Vec<Value> {
+fn steady_stretches(pictures: &[Picture]) -> Vec<Value> {
     let mut stretches = Vec::new();
     let mut from = 0;
     for at in 1..=pictures.len() {
@@ -313,7 +335,7 @@ fn steady_stretches(pictures: &[(f64, f64, f64)]) -> Vec<Value> {
         // The steady line is the least-squares line through the pictures after settling.
         let settling = stretch.partition_point(|picture| picture.0 < first.0 + SETTLE_S);
         let settled = &stretch[settling..];
-        let mean = |part: fn(&(f64, f64, f64)) -> f64| {
+        let mean = |part: fn(&Picture) -> f64| {
             settled.iter().map(part).sum::<f64>() / settled.len() as f64
         };
         let (mean_at, mean_song) = (mean(|picture| picture.0), mean(|picture| picture.1));
@@ -323,10 +345,9 @@ fn steady_stretches(pictures: &[(f64, f64, f64)]) -> Vec<Value> {
             across += (picture.0 - mean_at).powi(2);
         }
         let rate = along / across;
-        let furthest_ms = |pictures: &[(f64, f64, f64)]| {
-            let off = |picture: &(f64, f64, f64)| {
-                ((picture.1 - mean_song) - rate * (picture.0 - mean_at)).abs()
-            };
+        let furthest_ms = |pictures: &[Picture]| {
+            let off =
+                |picture: &Picture| ((picture.1 - mean_song) - rate * (picture.0 - mean_at)).abs();
             pictures.iter().map(off).fold(0.0, f64::max) * 1e3
         };
         stretches.push(json!({
@@ -357,6 +378,19 @@ impl ApplicationHandler for Journey<'_> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let told = match &event {
+            WindowEvent::Resized(size) => Some(format!("size {}x{}", size.width, size.height)),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                Some(format!("scale {scale_factor}"))
+            }
+            WindowEvent::Focused(focused) => Some(format!("focus {focused}")),
+            WindowEvent::Occluded(occluded) => Some(format!("out of sight {occluded}")),
+            _ => None,
+        };
+        if let Some(told) = told {
+            let at_s = self.opened.elapsed().as_secs_f64();
+            self.log.told.push(json!({ "at_s": at_s, "window": told }));
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -364,7 +398,6 @@ impl ApplicationHandler for Journey<'_> {
                     stage.screen.resize(&stage.gpu, size.into());
                 }
             }
-            WindowEvent::Focused(true) => self.log.had_focus = true,
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -375,14 +408,20 @@ impl ApplicationHandler for Journey<'_> {
                     },
                 ..
             } => self.press(key, event_loop),
-            WindowEvent::RedrawRequested => self.show(event_loop),
+            WindowEvent::RedrawRequested => {
+                // Once a picture has been handed over, the desktop asks for another only
+                // when it has shown one: from then on the window is known to be in sight.
+                self.in_sight |= !self.log.pictures.is_empty();
+                self.log.asked_for += 1;
+                self.show(event_loop);
+            }
             _ => {}
         }
     }
 
     /// Between pictures. The end of the song is looked for here and not while drawing,
-    /// because a window that is out of sight is asked for no pictures. Pictures ask for
-    /// one another; should the display take none for a while, one is asked for at each tick.
+    /// because a window that is out of sight is asked for no pictures: at each tick
+    /// without one, a picture is drawn unasked.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let at_s = self.opened.elapsed().as_secs_f64();
         while let Some((_, key)) = SCRIPT
@@ -392,14 +431,17 @@ impl ApplicationHandler for Journey<'_> {
             self.log.scripted += 1;
             self.press(*key, event_loop);
         }
-        let Some(stage) = &self.stage else { return };
-        if stage.playback.now().2 {
+        if self
+            .stage
+            .as_ref()
+            .is_some_and(|stage| stage.playback.now().2)
+        {
             event_loop.exit();
         }
         let now = Instant::now();
         if now >= self.tick {
             self.tick = now + TICK;
-            stage.window.request_redraw();
+            self.show(event_loop);
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.tick));
     }
