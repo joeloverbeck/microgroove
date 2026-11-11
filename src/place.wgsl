@@ -35,6 +35,10 @@ const STREAK_M = vec2<f32>(2.0, 90.0);
 const STRATUM_M: f32 = 7.0;
 // An impulse's light counts each metre it climbs a wall of rock as this many it runs out.
 const CLIMBS: f32 = 2.5;
+// The light takes hold of the land over this many metres past the floor's edge, and over
+// this many in still water: the bars in its shallows stand close beside the listener, where
+// the light is at its strongest, and a twelfth of the picture flashed with them.
+const TAKES_HOLD_M = vec2<f32>(4.0, 20.0);
 
 fn light() -> f32 {
     return mix(LEAST_LIGHT, 1.0, moment.origin.w);
@@ -227,7 +231,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
         let lit = moment.lights[i];
         let behind = (lit.z - climbed) / (10.0 + 0.4 * lit.z);
         let front = smoothstep(-0.2, 0.0, behind) * exp(-2.5 * max(behind, 0.0));
-        let land = (1.0 - flat) * smoothstep(0.0, 4.0, abs(in.beyond)) * step(-0.5, in.beyond * lit.x);
+        let land = (1.0 - flat) * smoothstep(0.0, mix(TAKES_HOLD_M.x, TAKES_HOLD_M.y, water), abs(in.beyond)) * step(-0.5, in.beyond * lit.x);
         colour += mix(accent, vec3<f32>(1.0), 0.5) * lit.w * LIT * (0.5 + grain) * front * land * exp(-range / LIT_M);
     }
     return vec4<f32>(hazed(colour, toward, range), 1.0);
