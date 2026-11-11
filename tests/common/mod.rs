@@ -25,6 +25,44 @@ pub fn run_timeline(song: &Path, out: &Path) -> Output {
         .unwrap()
 }
 
+/// Runs `still` or `run` with no display to draw on, and returns the files it says it wrote.
+pub fn inspect(command: &str, song: &Path, out: &Path, options: &[&str]) -> Vec<PathBuf> {
+    let output = Command::new(env!("CARGO_BIN_EXE_microgroove"))
+        .arg(command)
+        .arg(song)
+        .arg("--out")
+        .arg(out)
+        .args(options)
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{command} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let said = String::from_utf8(output.stdout).unwrap();
+    let files = said
+        .lines()
+        .filter(|line| line.ends_with(".png") || line.ends_with(".json"));
+    files.map(PathBuf::from).collect()
+}
+
+pub fn json(file: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
+}
+
+/// Quiet noise, then loud noise with clicks, then quiet noise again: 24 s.
+pub fn rising_and_falling_song(path: &Path) {
+    let mut signal = noise(8.0, 0.02);
+    let mut loud = noise(8.0, 0.3);
+    add_clicks(&mut loud, &every(0.25, 0.5, 7.9), 0.6);
+    signal.extend(loud);
+    signal.extend(noise(8.0, 0.02));
+    write_wav(path, &signal, &signal);
+}
+
 /// Runs `timeline` and returns the analysis numbers as raw bytes.
 pub fn numbers_bytes(song: &Path, out: &Path) -> Vec<u8> {
     let output = run_timeline(song, out);

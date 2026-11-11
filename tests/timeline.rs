@@ -1,17 +1,7 @@
 //! One command writes a timeline and the analysis numbers, the same every time.
 mod common;
 
-use common::{Value, f, numbers, numbers_bytes, run_timeline, scratch, write_wav};
-
-/// Quiet noise, then loud noise with clicks, then quiet noise again: 24 s.
-fn rising_and_falling_song(path: &std::path::Path) {
-    let mut signal = common::noise(8.0, 0.02);
-    let mut loud = common::noise(8.0, 0.3);
-    common::add_clicks(&mut loud, &common::every(0.25, 0.5, 7.9), 0.6);
-    signal.extend(loud);
-    signal.extend(common::noise(8.0, 0.02));
-    write_wav(path, &signal, &signal);
-}
+use common::{Value, f, numbers, numbers_bytes, rising_and_falling_song, run_timeline, scratch};
 
 #[test]
 fn one_command_writes_a_timeline_and_the_numbers_it_was_drawn_from() {

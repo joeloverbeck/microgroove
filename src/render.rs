@@ -1,0 +1,509 @@
+//! Renderer: a moment in; a picture out. The drawing code draws into whatever target it
+//! is handed, so a still and a window show the same thing. Nothing is carried from one
+//! picture to the next: each is one cleared pass over buffers that never change.
+
+use std::time::{Duration, Instant};
+
+use wgpu::util::DeviceExt;
+
+use crate::place::{Moment, Place, ROW_M, VERTEX_FLOATS, row_at};
+
+/// Pictures are drawn in linear light into an sRGB target, for a still and a window alike.
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Tuning: the height of the view, how far ahead the ground is drawn, and where the low
+/// sun stands (across, up, along the route).
+const VIEW_DEG: f64 = 56.0;
+const DRAWN_AHEAD_M: f64 = 12_000.0;
+const SUN_TOWARD: [f64; 3] = [0.3, 0.13, 1.0];
+const NEAR_M: f64 = 1.0;
+const FAR_M: f64 = 60_000.0;
+/// The most impulses drawn at once; the shader's array is this long.
+const MOST_RINGS: usize = 12;
+/// Positions reach the GPU relative to a point near the camera, on a grid this coarse,
+/// so that tens of kilometres along the route cost no precision.
+const ORIGIN_GRID_M: f64 = 256.0;
+
+pub type Size = (u32, u32);
+
+/// The GPU, reached with no window and no display.
+pub struct Gpu {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    /// Which adapter drew: stills are comparable only on the same one.
+    pub adapter: String,
+}
+
+impl Gpu {
+    pub fn headless() -> Result<Gpu, String> {
+        let mut instance = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance.backends = wgpu::Backends::VULKAN;
+        let options = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            apply_limit_buckets: false,
+        };
+        let adapter =
+            pollster::block_on(wgpu::Instance::new(instance).request_adapter(&options))
+                .map_err(|error| format!("no graphics adapter can draw the place ({error})"))?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(|error| format!("the graphics adapter cannot be used ({error})"))?;
+        let info = adapter.get_info();
+        Ok(Gpu {
+            device,
+            queue,
+            adapter: format!(
+                "{}, {:?}, driver {}",
+                info.name, info.backend, info.driver_info
+            ),
+        })
+    }
+
+    /// Draws one moment into a target and waits for it; returns how long the drawing took.
+    pub fn draw(
+        &self,
+        renderer: &Renderer,
+        target: &wgpu::TextureView,
+        moment: &Moment,
+    ) -> Result<Duration, String> {
+        let started = Instant::now();
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        renderer.draw(&self.queue, &mut encoder, target, moment);
+        let submitted = self.queue.submit([encoder.finish()]);
+        self.wait(Some(submitted))?;
+        Ok(started.elapsed())
+    }
+
+    fn wait(&self, submitted: Option<wgpu::SubmissionIndex>) -> Result<(), String> {
+        let wait = wgpu::PollType::Wait {
+            submission_index: submitted,
+            timeout: None,
+        };
+        self.device.poll(wait).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+}
+
+fn bytes(floats: &[f32]) -> Vec<u8> {
+    floats
+        .iter()
+        .flat_map(|float| float.to_ne_bytes())
+        .collect()
+}
+
+fn texture(device: &wgpu::Device, size: Size, format: wgpu::TextureFormat) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+/// The one piece of drawing code: the whole place on the GPU, drawn a moment at a time.
+pub struct Renderer {
+    sky: wgpu::RenderPipeline,
+    ground: wgpu::RenderPipeline,
+    lanterns: wgpu::RenderPipeline,
+    uniforms: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    depth: wgpu::TextureView,
+    lantern_count: u32,
+    /// Rows of ground, and the indices that draw one of them.
+    rows: u32,
+    row_indices: u32,
+    /// The part of every moment's uniforms that the place fixes: sky colours and the sun.
+    place: [f32; 16],
+    haze_per_m: f32,
+    aspect: f64,
+}
+
+impl Renderer {
+    /// Puts a place on the GPU, to be drawn into targets of one format and size.
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        size: Size,
+        place: &Place,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::include_wgsl!("place.wgsl"));
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (4 * (16 + 4 * 9 + 4 * MOST_RINGS)) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        // The sky is behind everything; the ground hides what is behind it; lanterns add
+        // their light on top of whatever ground does not hide them.
+        let pipeline = |name: &str,
+                        buffers: &[Option<wgpu::VertexBufferLayout>],
+                        blend: Option<wgpu::BlendState>,
+                        hides: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(name),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(&format!("{name}_vertex")),
+                    compilation_options: Default::default(),
+                    buffers,
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH,
+                    depth_write_enabled: Some(hides),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(&format!("{name}_fragment")),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let adding = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let vertex = wgpu::VertexBufferLayout {
+            array_stride: (4 * VERTEX_FLOATS) as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4],
+        };
+        let lantern = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+        };
+
+        let ground = place.ground();
+        let (rows, columns) = (ground.rows as u32, ground.columns as u32);
+        let indices: Vec<u32> = (0..rows - 1)
+            .flat_map(|row| (0..columns - 1).map(move |column| row * columns + column))
+            .flat_map(|corner| {
+                let (beside, beyond) = (corner + 1, corner + columns);
+                [corner, beyond, beside, beside, beyond, beyond + 1]
+            })
+            .collect();
+        let lanterns = place.lanterns();
+        let buffer = |contents: &[u8], usage| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents,
+                usage,
+            })
+        };
+        let sky = &place.sky;
+        let length = SUN_TOWARD
+            .iter()
+            .map(|part| part * part)
+            .sum::<f64>()
+            .sqrt();
+        let sun = SUN_TOWARD.map(|part| (part / length) as f32);
+        let mut fixed = [0.0; 16];
+        for (slot, colour) in [sky.zenith, sky.horizon, sky.sun, sun].iter().enumerate() {
+            fixed[slot * 4..slot * 4 + 3].copy_from_slice(colour);
+        }
+        Renderer {
+            sky: pipeline("sky", &[], None, false),
+            ground: pipeline("ground", &[Some(vertex)], None, true),
+            lanterns: pipeline(
+                "lantern",
+                &[Some(lantern)],
+                Some(wgpu::BlendState {
+                    color: adding,
+                    alpha: adding,
+                }),
+                false,
+            ),
+            uniforms,
+            bind_group,
+            vertices: buffer(&bytes(&ground.vertices), wgpu::BufferUsages::VERTEX),
+            indices: buffer(
+                &indices
+                    .iter()
+                    .flat_map(|index| index.to_ne_bytes())
+                    .collect::<Vec<u8>>(),
+                wgpu::BufferUsages::INDEX,
+            ),
+            // A buffer may not be empty, so a place with no lanterns still holds room for one.
+            instances: buffer(
+                &bytes(&[lanterns.as_slice(), &[0.0; 4]].concat()),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            depth: texture(device, size, DEPTH).create_view(&Default::default()),
+            lantern_count: (lanterns.len() / 4) as u32,
+            rows,
+            row_indices: (columns - 1) * 6,
+            place: fixed,
+            haze_per_m: sky.haze_per_m,
+            aspect: f64::from(size.0) / f64::from(size.1),
+        }
+    }
+
+    /// Everything the shader is told about a moment: the camera, the light, the impulses
+    /// in play, and the place's fixed colours.
+    fn uniforms(&self, moment: &Moment) -> Vec<f32> {
+        let camera = &moment.camera;
+        let [yaw, pitch, bank] =
+            [camera.yaw_deg, camera.pitch_deg, camera.bank_deg].map(f64::to_radians);
+        let forward = [
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        ];
+        let level = [yaw.cos(), 0.0, -yaw.sin()];
+        let over = cross(forward, level);
+        // Banking tips the camera toward the inside of the turn.
+        let tip = |a: [f64; 3], b: [f64; 3], sign: f64| {
+            [0, 1, 2].map(|i| a[i] * bank.cos() + sign * b[i] * bank.sin())
+        };
+        let (right, up) = (tip(level, over, -1.0), tip(over, level, 1.0));
+
+        let origin = [0, 2].map(|i| (camera.position_m[i] / ORIGIN_GRID_M).round() * ORIGIN_GRID_M);
+        let eye = [
+            camera.position_m[0] - origin[0],
+            camera.position_m[1],
+            camera.position_m[2] - origin[1],
+        ];
+        let half = (
+            (VIEW_DEG / 2.0).to_radians().tan() * self.aspect,
+            (VIEW_DEG / 2.0).to_radians().tan(),
+        );
+        let (deep, shift) = (FAR_M / (FAR_M - NEAR_M), -NEAR_M * FAR_M / (FAR_M - NEAR_M));
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let column = |i: usize| {
+            [
+                right[i] / half.0,
+                up[i] / half.1,
+                forward[i] * deep,
+                forward[i],
+            ]
+        };
+        let last = [
+            -dot(right, eye) / half.0,
+            -dot(up, eye) / half.1,
+            -dot(forward, eye) * deep + shift,
+            -dot(forward, eye),
+        ];
+
+        let shown = &moment.impulses[moment.impulses.len().saturating_sub(MOST_RINGS)..];
+        let mut uniforms: Vec<f64> = [column(0), column(1), column(2), last].concat();
+        uniforms.extend([origin[0], 0.0, origin[1], moment.light]);
+        uniforms.extend([eye[0], eye[1], eye[2], f64::from(self.haze_per_m)]);
+        uniforms.extend(right.map(|part| part * half.0));
+        uniforms.push(shown.len() as f64);
+        uniforms.extend(up.map(|part| part * half.1));
+        uniforms.push(0.0);
+        uniforms.extend(forward);
+        uniforms.push(0.0);
+        let mut uniforms: Vec<f32> = uniforms.iter().map(|value| *value as f32).collect();
+        uniforms.extend(self.place);
+        for impulse in shown {
+            let across = impulse.origin_m[0] - origin[0];
+            let along = impulse.origin_m[1] - origin[1];
+            uniforms.extend([across, along, impulse.reach_m, impulse.level].map(|v| v as f32));
+        }
+        uniforms.resize(16 + 4 * 9 + 4 * MOST_RINGS, 0.0);
+        uniforms
+    }
+
+    /// Draws one moment into a target of the format and size this renderer was made for.
+    pub fn draw(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        moment: &Moment,
+    ) {
+        queue.write_buffer(&self.uniforms, 0, &bytes(&self.uniforms(moment)));
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.sky);
+        pass.draw(0..3, 0..1);
+
+        // Only the ground from just behind the camera to the far haze is drawn.
+        let row = |route_m: f64| (row_at(route_m) as u32).min(self.rows - 1);
+        let first = row(moment.route_position_m - 2.0 * ROW_M);
+        let end = row(moment.route_position_m + DRAWN_AHEAD_M);
+        pass.set_pipeline(&self.ground);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(first * self.row_indices..end * self.row_indices, 0, 0..1);
+
+        if self.lantern_count > 0 {
+            pass.set_pipeline(&self.lanterns);
+            pass.set_vertex_buffer(0, self.instances.slice(..));
+            pass.draw(0..6, 0..self.lantern_count);
+        }
+    }
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// A picture made with no display: a texture to draw into and the means to read it back.
+pub struct Still {
+    texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    pub size: Size,
+    /// Bytes from one row to the next in the readback, which pads rows.
+    stride: u32,
+}
+
+impl Still {
+    pub fn new(device: &wgpu::Device, size: Size) -> Still {
+        let texture = texture(device, size, FORMAT);
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let stride = (size.0 * 4).div_ceil(align) * align;
+        Still {
+            view: texture.create_view(&Default::default()),
+            texture,
+            readback: device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(stride) * u64::from(size.1),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            size,
+            stride,
+        }
+    }
+
+    /// Brings the picture back from the GPU and hands over its rows, top row first: sRGB
+    /// bytes, four to a pixel, each row `stride` bytes after the one before.
+    pub fn read<R>(&self, gpu: &Gpu, with: impl FnOnce(&[u8], usize) -> R) -> Result<R, String> {
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            self.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.stride),
+                    rows_per_image: Some(self.size.1),
+                },
+            },
+            self.texture.size(),
+        );
+        gpu.queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.readback
+            .map_async(wgpu::MapMode::Read, .., move |mapped| {
+                let _ = sender.send(mapped);
+            });
+        gpu.wait(None)?;
+        receiver
+            .recv()
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+        let result = {
+            let rows = self
+                .readback
+                .get_mapped_range(..)
+                .map_err(|error| error.to_string())?;
+            with(&rows, self.stride as usize)
+        };
+        self.readback.unmap();
+        Ok(result)
+    }
+
+    /// The picture as a PNG file.
+    pub fn png(&self, gpu: &Gpu) -> Result<Vec<u8>, String> {
+        let (width, height) = (self.size.0 as usize, self.size.1 as usize);
+        let rgba = self.read(gpu, |rows, stride| {
+            let row = |y: usize| &rows[y * stride..y * stride + width * 4];
+            (0..height).flat_map(row).copied().collect::<Vec<u8>>()
+        })?;
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, self.size.0, self.size.1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(&rgba)
+            .map_err(|error| error.to_string())?;
+        writer.finish().map_err(|error| error.to_string())?;
+        Ok(png)
+    }
+}

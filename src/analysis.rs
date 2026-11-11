@@ -239,7 +239,7 @@ fn intensity(momentary: &[f32], hop_s: f64) -> Vec<f32> {
 }
 
 /// Each value averaged with its neighbours up to `reach` steps away, nearer ones counting more.
-fn smooth(values: &[f32], reach: usize) -> Vec<f32> {
+pub(crate) fn smooth(values: &[f32], reach: usize) -> Vec<f32> {
     (0..values.len())
         .map(|i| {
             let first = i.saturating_sub(reach);
