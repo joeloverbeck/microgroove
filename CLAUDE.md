@@ -52,7 +52,7 @@ A **journey** is one audio file ridden end to end, hands off. A **viewing** is a
 
 The world comes from the audio signal alone and is the same for the same file every time. Audio stays outside the repository.
 
-GitHub Issues and pull requests own active work. No issue exists yet; the first one bounds the first journey.
+GitHub Issues and pull requests own active work.
 
 ## Agent skills
 
