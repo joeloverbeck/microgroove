@@ -25,6 +25,7 @@ captures/
 .env
 .env.*
 !.env.example
+.private-terms
 *.local.toml
 
 # Editor and OS files

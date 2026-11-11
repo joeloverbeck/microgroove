@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""gh-private-scan: the Claude Code hook that stops a `gh` call from posting a private term.
+
+It reads the Bash call an agent is about to make, as JSON on standard input. Exit 0 lets
+the call run; exit 2 stops it and tells the agent why. See docs/agents/privacy.md.
+
+It scans what a `gh` call would post: text given inline (a title, a body, notes, the
+fields of `gh api`) and files given by path. A file it cannot read stops the call, and
+so does inline text the shell would build (`$(...)`): it cannot see either.
+"""
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+SCAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private-scan")
+POSTS = {"create", "comment", "edit", "review"}
+# For `gh issue|pr|release`: the options that take text, and those that take a file.
+TEXT = {"--title", "-t", "--body", "-b", "--notes", "-n"}
+FILE = {"--body-file", "-F", "--notes-file"}
+# For `gh api`: the options that take a field (`key=text` or `key=@file`).
+FIELD = {"-f", "--raw-field", "-F", "--field"}
+SEPARATORS = set(";&|()<>")
+
+
+def gh_calls(command):
+    """Each `gh` call in a command as its words after `gh`, with the words before it."""
+    # A line break ends a call as `;` does, unless a backslash carries the call over it.
+    command = command.replace("\\\n", " ").replace("\n", " ; ")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    words, before = [], []
+    for word in list(lexer) + [";"]:
+        if set(word) <= SEPARATORS:
+            if "gh" in words:
+                at = words.index("gh")
+                yield words[at + 1 :], before + words[:at]
+            before, words = before + words, []
+        else:
+            words.append(word)
+
+
+def posted(args):
+    """The inline texts and the files a `gh` call would post."""
+    texts, files = [], []
+    api = args[:1] == ["api"]
+    if not api and not (args[:1] and args[0] in {"issue", "pr", "release"} and args[1:2] and args[1] in POSTS):
+        return texts, files
+    at = 1
+    while at < len(args):
+        option, joined, value = args[at].partition("=") if args[at].startswith("--") else (args[at], "", "")
+        if not joined:
+            value = args[at + 1] if at + 1 < len(args) else ""
+        if api and option in FIELD:
+            field = value.partition("=")[2]
+            (files if field.startswith("@") else texts).append(field.lstrip("@"))
+        elif api and option == "--input" or not api and option in FILE:
+            files.append(value)
+        elif not api and option in TEXT:
+            texts.append(value)
+        else:
+            at += 1
+            continue
+        at += 1 if joined else 2
+    return texts, files
+
+
+def resolved(path, before, cwd):
+    """A file's path with the variables the command sets filled in, if it can be read."""
+    values = dict(os.environ)
+    for word in before:
+        name, equals, value = word.partition("=")
+        if equals and re.fullmatch(r"[A-Za-z_]\w*", name):
+            values[name] = value
+    path = re.sub(r"\$\{?(\w+)\}?", lambda found: values.get(found.group(1), found.group(0)), path)
+    path = os.path.expanduser(path)
+    if path == "-" or "$" in path:
+        return None
+    moved = [before[at + 1] for at, word in enumerate(before[:-1]) if word == "cd"]
+    for base in reversed([cwd] + moved):
+        candidate = os.path.join(base, path)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def problems(command, cwd):
+    found = []
+    try:
+        calls = list(gh_calls(command))
+    except ValueError:
+        # A quote left open, as a here-document may leave one: read it line by line.
+        calls = []
+        for line in command.splitlines():
+            try:
+                calls += list(gh_calls(line))
+            except ValueError:
+                if re.search(r"\bgh\s+(issue|pr|release|api)\b", line):
+                    found.append("this command could not be read: " + line.strip()[:60])
+    for args, before in calls:
+        texts, files = posted(args)
+        for text in texts:
+            if "$(" in text or "`" in text:
+                found.append("text built by the shell cannot be scanned; write it to a file and pass the file")
+        paths = []
+        for file in files:
+            path = resolved(file, before, cwd)
+            if path:
+                paths.append(path)
+            else:
+                found.append(f"the file {file!r} cannot be read here; pass a file by its plain path")
+        for arguments, text in ((paths, None), ([], "\n".join(texts))):
+            if arguments or text:
+                scan = subprocess.run([SCAN] + arguments, input=text, cwd=cwd, capture_output=True, text=True)
+                if scan.returncode:
+                    found.append((scan.stdout + scan.stderr).strip().replace("standard input", "the text given inline"))
+    return found
+
+
+def main():
+    try:
+        call = json.load(sys.stdin)
+        command = call["tool_input"]["command"]
+    except (ValueError, KeyError, TypeError):
+        return 0
+    if "gh" not in command:
+        return 0
+    cwd = call.get("cwd")
+    found = problems(command, cwd if cwd and os.path.isdir(cwd) else os.getcwd())
+    if not found:
+        return 0
+    print("gh-private-scan stopped this gh call:", file=sys.stderr)
+    for problem in found:
+        print(f"- {problem}", file=sys.stderr)
+    print("Put right what is listed and run it again. What is private: docs/agents/privacy.md", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# private-scan: fail when text holds a private term. See docs/agents/privacy.md.
+#
+#   private-scan FILE...            those files
+#   private-scan                    standard input
+#   private-scan --commits REV...   the messages and added lines of those commits
+#                                   (REV... as `git rev-list` takes them)
+#
+# It says where a term was found and never repeats the term or the line it is on.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) ||
+    common=$(git -C "$here" rev-parse --path-format=absolute --git-common-dir)
+root=$(dirname "$common")
+
+# The terms: the home directory, git's email, each path `.env` names with the directory
+# it is in, and the lines of `.private-terms`. All of them are read from the main
+# checkout, so a worktree is scanned with the same terms.
+terms() {
+    printf '%s\n' "${HOME%/}/"
+    git config user.email || true
+    if [ -f "$root/.env" ]; then
+        sed -n 's/^[A-Za-z_][A-Za-z0-9_]*=//p' "$root/.env" | tr -d "\"'" |
+            while IFS= read -r value; do
+                case "$value" in
+                /*) printf '%s\n%s/\n' "$value" "$(dirname "$value")" ;;
+                esac
+            done
+    fi
+    if [ -f "$root/.private-terms" ]; then
+        grep -v '^#' "$root/.private-terms" || true
+    fi
+}
+# A term shorter than four characters would be found everywhere.
+list=$(terms | awk 'length($0) >= 4' | sort -u)
+[ -n "$list" ] || exit 0
+
+# The numbers of the lines of standard input that hold a term, as "3,7"; nothing for none.
+lines() {
+    { grep -a -n -i -F -f <(printf '%s\n' "$list") || true; } | cut -d: -f1 | paste -sd, -
+}
+
+status=0
+case "${1:-}" in
+--commits)
+    shift
+    for commit in $(git rev-list "$@"); do
+        found=$(git show --format=%B -U0 "$commit" | { grep -a -v '^-' || true; } | lines)
+        if [ -n "$found" ]; then
+            echo "private term in commit ${commit:0:9}, in its message or a line it adds"
+            status=1
+        fi
+    done
+    ;;
+"")
+    found=$(lines)
+    if [ -n "$found" ]; then
+        echo "private term in standard input, line $found"
+        status=1
+    fi
+    ;;
+*)
+    for file in "$@"; do
+        found=$(lines <"$file")
+        if [ -n "$found" ]; then
+            echo "private term in $file, line $found"
+            status=1
+        fi
+    done
+    ;;
+esac
+exit $status
