@@ -4,7 +4,7 @@ Give it a song; it carries you through a place made from that song.
 
 `microgroove` is a personal Rust program. It analyses a whole local audio file before playing it, then flies the listener, hands off, through a dream landscape whose geography is the song's structure and whose future lies visibly ahead. Under magnification a record's groove is a canyon whose two walls are the left and right channels; the name takes that literally.
 
-**Status (2026-11-11):** an experiment in progress on the `first-journey` branch. The program decodes one audio file, analyses it, builds a place from the analysis, and rides it: full screen, with the song playing. It also writes a timeline of what it heard and a still of any moment of the place. The owner has ridden it on a display once, in viewing 1, and has accepted nothing.
+**Status (2026-11-11):** a first working slice. The program decodes one audio file, analyses it, builds a place from the analysis, and rides it: full screen, with the song playing. It also writes a timeline of what it heard and a still of any moment of the place. The owner has ridden it on a display twice. After the second ride, viewing 2, the owner called it good for a first working slice and authorized its merge to `main`, with issues about the implementation still to raise.
 
 ## Build
 
