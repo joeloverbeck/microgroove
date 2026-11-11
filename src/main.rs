@@ -1,9 +1,13 @@
-//! Command line: `timeline`, `still` and `run`, each on one audio file and with no display.
+//! Command line: a journey through one audio file, which is what a path alone asks for;
+//! the silent self-launch that tries a journey out; and `timeline`, `still` and `run`,
+//! which inspect the same file with no display.
 
 mod analysis;
 mod comfort;
 mod decode;
+mod journey;
 mod place;
+mod playback;
 mod render;
 mod timeline;
 
@@ -16,7 +20,9 @@ use serde::Serialize;
 use place::Place;
 use render::{FORMAT, Gpu, Renderer, Size, Still};
 
-const USAGE: &str = "usage: microgroove timeline <audio file> [--out <directory>]
+const USAGE: &str = "usage: microgroove [ride] <audio file> [--size <width>x<height>] [--out <directory>]
+       microgroove self-launch <audio file> [--from <song time>] [--size <width>x<height>] [--out <directory>]
+       microgroove timeline <audio file> [--out <directory>]
        microgroove still <audio file> --at <song time> [--at <song time> ...] [--size <width>x<height>] [--out <directory>]
        microgroove run <audio file> [--from <song time>] [--to <song time>] [--rate <moments a second>] [--size <width>x<height>] [--out <directory>]
 a song time is seconds (95.5) or minutes and seconds (1:35.5)";
@@ -33,6 +39,15 @@ const DISPLAY_HZ: usize = 144;
 const LEAST_REVERSAL: (f32, f32) = (0.01, 0.02);
 
 type Command = fn(&Request) -> Result<(), String>;
+
+/// Each command and the options it takes. A journey comes first: it is what a path alone asks for.
+const COMMANDS: [(&str, Command, &[&str]); 5] = [
+    ("ride", ride, &["--size", "--out"]),
+    ("self-launch", self_launch, &["--size", "--from", "--out"]),
+    ("timeline", timeline, &["--out"]),
+    ("still", still, &["--out", "--size", "--at"]),
+    ("run", run, &["--out", "--size", "--from", "--to", "--rate"]),
+];
 
 /// What the command line asks for.
 #[derive(Default)]
@@ -86,15 +101,14 @@ struct Series {
 }
 
 fn main() -> ExitCode {
-    let mut args = std::env::args_os().skip(1);
-    let command = args.next().and_then(|command| command.into_string().ok());
-    let (act, options): (Command, &[&str]) = match command.as_deref() {
-        Some("timeline") => (timeline, &["--out"]),
-        Some("still") => (still, &["--out", "--size", "--at"]),
-        Some("run") => (run, &["--out", "--size", "--from", "--to", "--rate"]),
-        _ => (|_| Ok(()), &[]),
-    };
-    let Some(request) = parse(args.collect(), options) else {
+    let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let named = |name: &OsString| COMMANDS.iter().position(|command| name == command.0);
+    let command = args.first().and_then(named);
+    let (_, act, options) = COMMANDS[command.map_or(0, |command| {
+        args.remove(0);
+        command
+    })];
+    let Some(request) = parse(args, options) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
@@ -142,7 +156,7 @@ fn parse(args: Vec<OsString>, options: &[&str]) -> Option<Request> {
     request.song = song?;
     // A command that takes moments must be given at least one.
     let wants_moments = options.contains(&"--at");
-    (!options.is_empty() && request.at.is_empty() != wants_moments).then_some(request)
+    (request.at.is_empty() != wants_moments).then_some(request)
 }
 
 /// Seconds (`95.5`) or minutes and seconds (`1:35.5`).
@@ -209,8 +223,21 @@ fn timeline(request: &Request) -> Result<(), String> {
     write(&out, "analysis.json", json(&numbers, true)?)
 }
 
-/// The place made from a file, on a GPU with no display, with a picture to draw it into.
-fn prepare(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), String> {
+/// The least, the median, the 95th and 99th in a hundred, and the greatest of some values.
+fn spread(mut values: Vec<f64>) -> serde_json::Value {
+    values.sort_by(f64::total_cmp);
+    let share = |of: usize| values.get(values.len().saturating_sub(1) * of / 100);
+    serde_json::json!({
+        "least": share(0),
+        "median": share(50),
+        "p95": share(95),
+        "p99": share(99),
+        "max": share(100),
+    })
+}
+
+/// The song in a file, how long it is, and the place made from it.
+fn place_of(request: &Request) -> Result<(decode::Song, f64, Place), String> {
     let (song, analysis) = hear(&request.song)?;
     let end_s = song.duration_s();
     let late = [request.from, request.to]
@@ -223,6 +250,49 @@ fn prepare(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), Stri
         ));
     }
     let place = Place::of(&analysis, end_s);
+    Ok((song, end_s, place))
+}
+
+/// Rides the song: full screen, the song playing, until it ends or a key quits.
+fn ride(request: &Request) -> Result<(), String> {
+    journey(request, false)
+}
+
+/// Tries a journey out for a few seconds without a sound, and reports what it measured.
+fn self_launch(request: &Request) -> Result<(), String> {
+    journey::end_within(journey::LIMIT);
+    journey(request, true)
+}
+
+fn journey(request: &Request, silent: bool) -> Result<(), String> {
+    let (song, _, place) = place_of(request)?;
+    let size = request.size.unwrap_or(DISPLAY);
+    let from_s = request.from.unwrap_or(0.0);
+    let ridden = journey::ride(song, &place, size, from_s, silent)?;
+    let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));
+    let name = if silent { "self-launch" } else { "journey" };
+    if let Some((moment, picture)) = ridden.last {
+        let numbers = StillNumbers {
+            moment: &moment,
+            place: place.summary(),
+            size,
+            adapter: &ridden.adapter,
+        };
+        write(&out, &format!("{name}-last.png"), picture)?;
+        write(&out, &format!("{name}-last.json"), json(&numbers, true)?)?;
+    }
+    let measured = json(&ridden.measured, true)?;
+    if silent {
+        print!("{}", String::from_utf8_lossy(&measured));
+    }
+    write(&out, &format!("{name}.json"), measured)?;
+    println!("nudge at exit: {:+} ms", ridden.nudge_ms);
+    Ok(())
+}
+
+/// The place made from a file, on a GPU with no display, with a picture to draw it into.
+fn prepare(request: &Request) -> Result<(f64, Place, Gpu, Renderer, Still), String> {
+    let (_, end_s, place) = place_of(request)?;
     let gpu = Gpu::headless()?;
     let size = request.size.unwrap_or(DISPLAY);
     let renderer = Renderer::new(&gpu.device, FORMAT, size, &place);
@@ -296,8 +366,6 @@ fn run(request: &Request) -> Result<(), String> {
     let reversals =
         |(pose, least): &(&Vec<f32>, f32)| comfort::worst_reversals_in_a_second(pose, *least, rate);
     let flashes = |luminance: &Vec<f32>| comfort::worst_flashes_in_a_second(luminance, rate);
-    draw_ms.sort_by(f64::total_cmp);
-    let share = |of: usize| draw_ms[(count - 1) * of / 100];
     // Flashes are counted on the mean relative luminance of the whole picture and of each
     // tile of it. The camera's worst is over every part of its pose. Drawing is timed
     // from submitting a moment to the GPU having finished it.
@@ -314,13 +382,7 @@ fn run(request: &Request) -> Result<(), String> {
                 comfort::widest_range_in_a_second(&series.luminance, rate),
         },
         "camera": { "worst_reversals_in_any_second": poses.iter().map(reversals).max() },
-        "draw_ms": {
-            "least": share(0),
-            "median": share(50),
-            "p95": share(95),
-            "p99": share(99),
-            "max": share(100),
-        },
+        "draw_ms": spread(draw_ms),
         "series": series,
     });
     let out = request.out.clone().unwrap_or(PathBuf::from(CAPTURES));

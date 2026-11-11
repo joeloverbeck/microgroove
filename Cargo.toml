@@ -7,7 +7,9 @@ description = "Give it a song; it carries you through a place made from that son
 publish = false
 
 [dependencies]
+cpal = { version = "0.18.2", features = ["pipewire"] }
 ebur128 = "0.1.11"
+libc = "0.2.191"
 md-5 = "0.11.0"
 png = "0.18.1"
 pollster = "1.0.1"
@@ -16,6 +18,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 symphonia = "0.6.1"
 wgpu = "30.0.1"
+winit = "0.30.13"
 
 # Tests drive the built program, so the unoptimised default would make every
 # analysis of a whole song slow. Dependencies carry the DSP; optimise them fully.

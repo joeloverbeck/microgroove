@@ -41,29 +41,43 @@ pub struct Gpu {
 
 impl Gpu {
     pub fn headless() -> Result<Gpu, String> {
-        let mut instance = wgpu::InstanceDescriptor::new_without_display_handle();
+        let instance = wgpu::InstanceDescriptor::new_without_display_handle();
+        Ok(Gpu::reach(instance, None)?.0)
+    }
+
+    /// Reaches the GPU and, where there is a window, the surface that shows pictures in it.
+    fn reach(
+        mut instance: wgpu::InstanceDescriptor,
+        window: Option<wgpu::SurfaceTarget<'static>>,
+    ) -> Result<(Gpu, Option<wgpu::Surface<'static>>, wgpu::Adapter), String> {
         instance.backends = wgpu::Backends::VULKAN;
+        let instance = wgpu::Instance::new(instance);
+        let surface = window
+            .map(|window| instance.create_surface(window))
+            .transpose()
+            .map_err(|error| format!("the window cannot be drawn in ({error})"))?;
         let options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
-            compatible_surface: None,
+            compatible_surface: surface.as_ref(),
             apply_limit_buckets: false,
         };
-        let adapter =
-            pollster::block_on(wgpu::Instance::new(instance).request_adapter(&options))
-                .map_err(|error| format!("no graphics adapter can draw the place ({error})"))?;
+        let adapter = pollster::block_on(instance.request_adapter(&options))
+            .map_err(|error| format!("no graphics adapter can draw the place ({error})"))?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                 .map_err(|error| format!("the graphics adapter cannot be used ({error})"))?;
         let info = adapter.get_info();
-        Ok(Gpu {
+        let adapter_said = format!(
+            "{}, {:?}, driver {}",
+            info.name, info.backend, info.driver_info
+        );
+        let gpu = Gpu {
             device,
             queue,
-            adapter: format!(
-                "{}, {:?}, driver {}",
-                info.name, info.backend, info.driver_info
-            ),
-        })
+            adapter: adapter_said,
+        };
+        Ok((gpu, surface, adapter))
     }
 
     /// Draws one moment into a target and waits for it; returns how long the drawing took.
@@ -98,7 +112,8 @@ fn bytes(floats: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// A texture to draw into. One with a single sample to the pixel can be read back.
+/// A texture to draw into. One with a single sample to the pixel can be read back, and
+/// copied to a window.
 fn texture(
     device: &wgpu::Device,
     size: Size,
@@ -106,7 +121,7 @@ fn texture(
     sample_count: u32,
 ) -> wgpu::Texture {
     let read = if sample_count == 1 {
-        wgpu::TextureUsages::COPY_SRC
+        wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING
     } else {
         wgpu::TextureUsages::empty()
     };
@@ -446,6 +461,104 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
+}
+
+/// The window a journey is shown in. A picture is drawn exactly as a still is and then
+/// copied to the window, so the window shows what the still shows, whatever its own size.
+pub struct Screen {
+    surface: wgpu::Surface<'static>,
+    pub config: wgpu::SurfaceConfiguration,
+    copy: wgpu::util::TextureBlitter,
+}
+
+impl Screen {
+    /// Reaches the GPU through a window of the given size.
+    pub fn open(
+        instance: wgpu::InstanceDescriptor,
+        window: impl Into<wgpu::SurfaceTarget<'static>>,
+        size: Size,
+    ) -> Result<(Gpu, Screen), String> {
+        let (gpu, surface, adapter) = Gpu::reach(instance, Some(window.into()))?;
+        let surface = surface.ok_or("the window has nothing to draw in")?;
+        let offered = surface.get_capabilities(&adapter);
+        let srgb = offered.formats.iter().find(|format| format.is_srgb());
+        let opaque = wgpu::CompositeAlphaMode::Opaque;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: *srgb.ok_or("the display takes no sRGB picture")?,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: size.0.max(1),
+            height: size.1.max(1),
+            // One picture for each refresh of the display, in order, never torn.
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: if offered.alpha_modes.contains(&opaque) {
+                opaque
+            } else {
+                wgpu::CompositeAlphaMode::Auto
+            },
+            view_formats: vec![],
+        };
+        surface.configure(&gpu.device, &config);
+        let copy = wgpu::util::TextureBlitterBuilder::new(&gpu.device, config.format)
+            .sample_type(wgpu::FilterMode::Linear)
+            .build();
+        Ok((
+            gpu,
+            Screen {
+                surface,
+                config,
+                copy,
+            },
+        ))
+    }
+
+    /// The window has a new size, in pixels.
+    pub fn resize(&mut self, gpu: &Gpu, size: Size) {
+        if size.0 > 0 && size.1 > 0 {
+            (self.config.width, self.config.height) = size;
+            self.surface.configure(&gpu.device, &self.config);
+        }
+    }
+
+    /// Draws a moment into `picture` as a still is drawn, and shows it in the window.
+    /// `about_to_show` is called just before the picture is handed to the display. False
+    /// when the display had no room for a picture this time.
+    pub fn show(
+        &self,
+        gpu: &Gpu,
+        renderer: &Renderer,
+        picture: &Still,
+        moment: &Moment,
+        about_to_show: impl FnOnce(),
+    ) -> Result<bool, String> {
+        use wgpu::CurrentSurfaceTexture as Room;
+        let frame = match self.surface.get_current_texture() {
+            Room::Success(frame) => frame,
+            Room::Timeout | Room::Occluded => return Ok(false),
+            // The window changed under the surface. A stale frame must go before the
+            // surface is set up again.
+            Room::Suboptimal(stale) => {
+                drop(stale);
+                self.surface.configure(&gpu.device, &self.config);
+                return Ok(false);
+            }
+            Room::Outdated => {
+                self.surface.configure(&gpu.device, &self.config);
+                return Ok(false);
+            }
+            Room::Lost | Room::Validation => return Err("the display was lost".to_string()),
+        };
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&gpu.queue, &mut encoder, &picture.view, moment);
+        let shown = frame.texture.create_view(&Default::default());
+        self.copy
+            .copy(&gpu.device, &mut encoder, &picture.view, &shown);
+        gpu.queue.submit([encoder.finish()]);
+        about_to_show();
+        gpu.queue.present(frame);
+        Ok(true)
+    }
 }
 
 /// A picture made with no display: a texture to draw into and the means to read it back.
