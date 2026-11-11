@@ -28,8 +28,12 @@ The program analyses the whole file, then opens a borderless full-screen window 
 | Escape or Q | quits |
 | Right arrow | shows the picture 5 ms earlier against the audio; press it when what you see lands after what you hear |
 | Left arrow | shows the picture 5 ms later |
+| Up arrow | turns the dial up a step: the camera rides a tenth nearer the ground, so the ground passes faster |
+| Down arrow | turns the dial down a step: the camera rides a tenth higher, so the ground passes slower |
 
-As it ends, a journey prints the nudge in use (`nudge at exit: +10 ms`) and then writes what it measured of itself to `captures/journey.json`: the time between pictures, how steadily song time ran, the keys pressed, and anything the audio device reported. If that file cannot be written the journey says so and still ends well. `--size <width>x<height>` draws the picture smaller than the display and scales it up; `--out <directory>` writes the measurements somewhere else.
+The nudge and the dial are aids for this experiment. The dial goes eight steps either way and changes only the camera's height: the place, the speed along the route and the land beside it stay as they are.
+
+As it ends, a journey prints the nudge and the dial in use (`nudge at exit: +10 ms; dial at exit: +2`) and then writes what it measured of itself to `captures/journey.json`: the time between pictures, how steadily song time ran, the keys pressed with their times, and anything the audio device reported. If that file cannot be written the journey says so and still ends well. `--size <width>x<height>` draws the picture smaller than the display and scales it up; `--out <directory>` writes the measurements somewhere else.
 
 `captures/` and `stills/`, here and below, are made under the directory the program is run from. Inside this repository both are git-ignored, at any depth.
 
@@ -50,7 +54,7 @@ cargo run --release -- "$MICROGROOVE_SONG"
 cargo run --release -- self-launch "$MICROGROOVE_SONG"
 ```
 
-This is the same journey with every sample multiplied by zero, so it makes no sound. It opens the real window and the real audio device, presses its own keys (both nudges, pause, resume, quit), quits by itself after about ten seconds, and is ended outright at 15 seconds if it has not. It takes over the screen while it runs. It prints its measurements and writes them to `captures/self-launch.json`, with the last picture it showed as `captures/self-launch-last.png` and that moment's numbers beside it; a still made with `still --at <that song time>` is the same moment drawn with no display. `--from <song time>` starts it somewhere other than the beginning. Its measurements say whether the window was ever shown, how many pictures were drawn without the desktop asking (they are left out of the time between pictures), and each time the audio clock laid its steady line afresh or passed over a stray saying of the device, with the song time and the size in ms.
+This is the same journey with every sample multiplied by zero, so it makes no sound. It opens the real window and the real audio device, presses its own keys (both nudges, both ways of the dial, pause, resume, quit), quits by itself after about ten seconds, and is ended outright at 15 seconds if it has not. It takes over the screen while it runs. It prints its measurements and writes them to `captures/self-launch.json`, with the last picture it showed as `captures/self-launch-last.png` and that moment's numbers beside it; a still made with `still --at <that song time> --dial <the dial at exit>` is the same moment drawn with no display. `--from <song time>` starts it somewhere other than the beginning. Its measurements say whether the window was ever shown, how many pictures were drawn without the desktop asking (they are left out of the time between pictures), and each time the audio clock laid its steady line afresh or passed over a stray saying of the device, with the song time and the size in ms.
 
 A self-launch is not a viewing: nobody judges it.
 
@@ -70,7 +74,7 @@ Make a still of one or more moments, without a display:
 cargo run --release -- still /path/to/song.flac --at 1:50 --at 3:25.5
 ```
 
-A song time is seconds (`95.5`) or minutes and seconds (`1:35.5`). For each moment this writes `stills/still-<seconds>.png` and, beside it, `still-<seconds>.json` with the numbers behind the moment: position on the route, the region, the camera's pose, the light level and the impulses in play. A still is 3840×2160 unless `--size <width>x<height>` says otherwise, and `--out <directory>` writes somewhere else. A moment depends only on the audio and the song time, so the same moment gives the same still on every run, in whatever order stills are asked for. A song whose route runs further than the GPU can hold ground for, about 340 km today, is refused with one line that says how many minutes of it the place can hold.
+A song time is seconds (`95.5`) or minutes and seconds (`1:35.5`). For each moment this writes `stills/still-<seconds>.png` and, beside it, `still-<seconds>.json` with the numbers behind the moment: position on the route, the region, the camera's pose, the light level, the speed, how fast the ground and the land beside the route pass, and the impulses in play. A still is 3840×2160 unless `--size <width>x<height>` says otherwise, `--dial <steps>` shows the moment as a journey does with its dial turned that far (from -8 to 8), and `--out <directory>` writes somewhere else. A moment depends only on the audio and the song time, so the same moment gives the same still on every run, in whatever order stills are asked for. A song whose route runs further than the GPU can hold ground for, about 340 km today, is refused with one line that says how many minutes of it the place can hold.
 
 Measure a run of consecutive moments, without a display:
 
@@ -78,7 +82,7 @@ Measure a run of consecutive moments, without a display:
 cargo run --release -- run /path/to/song.flac --from 3:30 --to 3:47
 ```
 
-This draws every moment of the stretch at 144 a second and 3840×2160 and writes `captures/run-<from>-<to>.json`: the most full-screen flashes in any one second (after the "general flash" of WCAG 2.2, as a measuring aid and not a conformance claim), the most times the camera's pose turns back on itself in any one second, how long each moment took to draw, and the position, pose, light and luminance of every moment. It prints the summary. Without `--from` and `--to` it covers the whole song; `--rate <moments a second>` and `--size` make a cheaper run.
+This draws every moment of the stretch at 144 a second and 3840×2160 and writes `captures/run-<from>-<to>.json`: the most full-screen flashes in any one second (after the "general flash" of WCAG 2.2, as a measuring aid and not a conformance claim), the most times the camera's pose turns back on itself in any one second, how fast what is near passes the camera, how long each moment took to draw, and the position, pose, speed, light and luminance of every moment. The passing rates are in times a second: the speed divided by the camera's height above the ground under it, and the speed divided by the distance to where the land beside the route begins. It prints the summary. Without `--from` and `--to` it covers the whole song; `--rate <moments a second>` and `--size` make a cheaper run, and `--dial <steps>` measures it as a journey shows it with its dial turned.
 
 Check the work:
 
