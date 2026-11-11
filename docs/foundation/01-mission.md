@@ -4,7 +4,7 @@
 
 The repository owner (GitHub `joeloverbeck`) is the only acceptance authority. This document records the owner's founding decisions from the interview of **2026-11-11**. It specializes [the constitution](../principles/principles-for-repos.md), chiefly `PURP`, `EVID`, `BOUND` and `GOV`, with this repository's facts; the constitution governs wherever the two differ.
 
-Nothing here is built or demonstrated. Every design statement in these foundations is a proposal until the owner has ridden a real journey and accepted it.
+The owner accepted these foundations, and their publication in a public repository, on 2026-11-11. That acceptance covers the decisions and limits recorded here. Nothing is built or demonstrated, and every design statement remains a proposal until the owner has ridden a real journey and accepted it.
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Expansion event: owner acceptance of claim 1 permits selecting claim 2 through i
 
 Appetite for claim 1: one bounded GitHub issue and **12 owner viewings**, defined in [the first journey](03-first-journey.md#appetite), under the default limits of `WORK-3` and `OPS-4`.
 
-Portfolio: the owner states that this repository runs alongside current work and displaces nothing. No change to any other repository's status is authorized.
+Portfolio: the owner names `arkham-unfolded` and `netrunner-unfolded`, with `unfolded-tabletop` as their shared code, as the only other current projects. This repository runs alongside them and displaces nothing. No change to any other repository's status is authorized.
 
 ## Incumbent and comparison
 
