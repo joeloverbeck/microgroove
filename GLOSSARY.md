@@ -36,6 +36,10 @@ _Avoid_: world, level, scene
 The stretch of a place made from one section.
 _Avoid_: zone, biome
 
+**Kind**:
+What sort of landscape a region is, chosen by its section's own sound: still water where the song is at rest, terraced rock where it is loud and dark, ice where it is thin and not dark, dunes everywhere else. A kind is what the ground is made of, how the land is carved out of the song's spectrum, and what the air is like; colour is not part of it.
+_Avoid_: biome, theme
+
 **Route**:
 The line through a place that the listener is carried along, laid out so that song time is distance.
 _Avoid_: track, path
@@ -43,6 +47,10 @@ _Avoid_: track, path
 **Impulse**:
 The place's visible answer to one onset.
 _Avoid_: flash, pulse
+
+**Form**:
+The impulse of an onset that stands out in the song: a thing standing on the route a little past where the route is at the onset's song time, so that the last of it leaves the listener's view as the onset sounds. A rib across the floor for a low sound, standing stones beside the route for a middle one, thin masts for a high one.
+_Avoid_: hit, obstacle
 
 **Moment**:
 A place as it appears at one song time.
