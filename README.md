@@ -4,15 +4,55 @@ Give it a song; it carries you through a place made from that song.
 
 `microgroove` is a personal Rust program at the foundation stage. It will analyse a whole local audio file before playing it, then fly the listener, hands off, through a dream landscape whose geography is the song's structure and whose future lies visibly ahead. Under magnification a record's groove is a canyon whose two walls are the left and right channels; the name takes that literally.
 
-**Status (2026-11-11):** an experiment in progress on the `first-journey` branch. The program decodes one audio file, analyses it, builds a place from the analysis, and writes a timeline of what it heard and a still of any moment of the place. No journey can be ridden yet, and the owner has accepted nothing.
+**Status (2026-11-11):** an experiment in progress on the `first-journey` branch. The program decodes one audio file, analyses it, builds a place from the analysis, and rides it: full screen, with the song playing. It also writes a timeline of what it heard and a still of any moment of the place. The journey has not yet been seen on a display, by the owner or by a measurement, and the owner has accepted nothing.
 
-## Build and inspect
+## Build
 
-Needs a Rust toolchain; it is built and tested with Rust 1.97.1. Stills are drawn on the GPU through Vulkan, with no window and no display. ffmpeg is optional: where it is installed, the tests compare the program's decode and loudness with it.
+Needs a Rust toolchain; it is built and tested with Rust 1.97.1. On Ubuntu the audio output also needs `libasound2-dev` and `libpipewire-0.3-dev` at build time, and libclang, which generates the PipeWire bindings. Pictures are drawn on the GPU through Vulkan. ffmpeg is optional: where it is installed, the tests compare the program's decode and loudness with it.
 
 ```sh
 cargo build --release
 ```
+
+## Ride
+
+```sh
+cargo run --release -- /path/to/song.flac
+```
+
+The program analyses the whole file, then opens a borderless full-screen window and plays the song, unaltered, through the default audio device. Each picture shows the moment for the song time being heard at that instant, taken from the audio device's own clock. A journey needs no input and ends by itself when the file ends.
+
+| Key | What it does |
+| --- | --- |
+| Space | pauses sound and picture together, and resumes both |
+| Escape or Q | quits |
+| Right arrow | shows the picture 5 ms earlier against the audio; press it when what you see lands after what you hear |
+| Left arrow | shows the picture 5 ms later |
+
+As it ends, a journey prints the nudge in use (`nudge at exit: +10 ms`) and writes what it measured of itself to `captures/journey.json`: the time between pictures, how steadily song time ran, the keys pressed, and anything the audio device reported. `--size <width>x<height>` draws the picture smaller than the display and scales it up; `--out <directory>` writes the measurements somewhere else.
+
+The program does not resample: it asks the audio device for the file's own sample rate. With no screen attached and switched on, a journey is refused before a window or the audio device is opened.
+
+On the owner's machine the song's path lives in `MICROGROOVE_SONG` in the git-ignored `.env` (see `.env.example`). The program never reads `.env`; it takes the path on the command line. Load the variable into the shell first:
+
+```sh
+set -a; . ./.env; set +a
+cargo run --release -- "$MICROGROOVE_SONG"
+```
+
+`.env` is untracked, so a git worktree does not contain it: load it from the main checkout.
+
+### Silent self-launch
+
+```sh
+cargo run --release -- self-launch "$MICROGROOVE_SONG"
+```
+
+This is the same journey with every sample multiplied by zero, so it makes no sound. It opens the real window and the real audio device, presses its own keys (both nudges, pause, resume, quit), quits by itself after about ten seconds, and is ended outright at 15 seconds if it has not. It takes over the screen while it runs. It prints its measurements and writes them to `captures/self-launch.json`, with the last picture it showed as `captures/self-launch-last.png` and that moment's numbers beside it; a still made with `still --at <that song time>` is the same moment drawn with no display. `--from <song time>` starts it somewhere other than the beginning.
+
+A self-launch is not a viewing: nobody judges it.
+
+## Inspect
 
 Make a timeline, without a display:
 
