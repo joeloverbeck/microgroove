@@ -67,6 +67,10 @@ const SWEEP: f64 = 0.75;
 const CREST: (f64, f64) = (1.5, 3.0);
 /// The size of the swell of the floor.
 const LANDFORM_M: f64 = 800.0;
+/// Fixed noise is left only as grain: it makes the land this much taller or lower, in
+/// shapes this size and smaller.
+const GRAIN: f64 = 0.35;
+const GRAIN_M: f64 = 150.0;
 /// The ground is laid in rows this far apart, from this far behind the start to this far
 /// beyond the end, and reaches this far to either side of the route.
 pub const ROW_M: f64 = 10.0;
@@ -87,7 +91,7 @@ const LEAN_DB: f32 = 3.0;
 /// stands from the middle of the route, half its width across the route, half its depth
 /// along it, and its height at level 0 and at level 1.
 const FORMS: [(f64, f64, f64, (f64, f64)); 3] = [
-    (0.5, 0.5, 0.015, (0.015, 0.03)),
+    (0.5, 0.5, 0.015, (0.012, 0.022)),
     (0.9, 0.06, 0.06, (0.5, 1.0)),
     (0.55, 0.012, 0.012, (1.6, 3.0)),
 ];
@@ -219,7 +223,7 @@ pub struct Camera {
 
 /// The land across the route at the listener's position: its height above the floor on
 /// the left and on the right, at each distance from the middle of the route where a band
-/// of the sound stands. The floor's own swell of a few metres is not in it.
+/// of the sound stands. Neither the floor's swell nor the land's grain is in it.
 #[derive(Serialize)]
 pub struct Profile {
     pub across_m: Vec<f64>,
@@ -717,7 +721,9 @@ impl Place {
                 let across = crowd(column as f64 / (COLUMNS - 1) as f64 * 2.0 - 1.0);
                 let x = centre + across;
                 let beyond = (across.abs() - floor).max(0.0);
+                let grain = fractal((x / GRAIN_M) as f32, (along / GRAIN_M) as f32);
                 let height = self.stands(row, usize::from(across > 0.0), beyond, sharpness)
+                    * (1.0 + GRAIN * (f64::from(grain) - 0.5))
                     + f64::from(swell(x as f32, along as f32));
                 positions.push([x as f32, height as f32, along as f32]);
                 let beyond = beyond.copysign(across) as f32;

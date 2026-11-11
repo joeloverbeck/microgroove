@@ -24,7 +24,7 @@ struct Moment {
 const LEAST_LIGHT: f32 = 0.14;
 const SEAM_M: f32 = 34.0;
 const GLOW: f32 = 0.55;
-const LIT: f32 = 0.8;
+const LIT: f32 = 0.6;
 const LIT_M: f32 = 1200.0;
 
 fn light() -> f32 {
@@ -157,7 +157,7 @@ fn ground_fragment(in: GroundOut) -> @location(0) vec4<f32> {
         let behind = (lit.z - abs(in.beyond)) / (10.0 + 0.4 * lit.z);
         let front = smoothstep(-0.2, 0.0, behind) * exp(-2.5 * max(behind, 0.0));
         let land = (1.0 - wet) * smoothstep(0.0, 4.0, abs(in.beyond)) * step(-0.5, in.beyond * lit.x);
-        colour += mix(accent, vec3<f32>(1.0), 0.5) * lit.w * LIT * front * land * exp(-range / LIT_M);
+        colour += mix(accent, vec3<f32>(1.0), 0.5) * lit.w * LIT * (0.5 + grain) * front * land * exp(-range / LIT_M);
     }
     return vec4<f32>(hazed(colour, toward, range), 1.0);
 }

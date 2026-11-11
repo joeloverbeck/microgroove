@@ -44,6 +44,10 @@ _Avoid_: track, path
 The place's visible answer to one onset.
 _Avoid_: flash, pulse
 
+**Form**:
+The impulse of an onset that stands out in the song: a thing standing where the route is at the onset's song time, which the listener passes as it sounds. A rib across the floor for a low sound, standing stones beside the route for a middle one, thin masts for a high one.
+_Avoid_: hit, obstacle
+
 **Moment**:
 A place as it appears at one song time.
 _Avoid_: frame
