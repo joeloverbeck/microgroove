@@ -186,8 +186,7 @@ fn inside(moment: &Value, form: &Value) -> f64 {
 }
 
 #[test]
-fn onsets_that_stand_out_get_a_form_for_their_part_on_their_side_that_leaves_the_picture_as_they_sound()
- {
+fn onsets_that_stand_out_get_forms_by_part_and_side_that_leave_the_picture_as_they_sound() {
     let dir = scratch("land-forms");
     let song = dir.join("strikes.wav");
     // Four low thumps, four middle bursts and four high clicks a second apart, with a

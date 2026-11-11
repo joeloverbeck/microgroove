@@ -148,7 +148,8 @@ const TAIL_S: f64 = 4.0;
 pub const VERTEX_FLOATS: usize = 15;
 /// Floats per lantern: position, level, radius.
 pub const LANTERN_FLOATS: usize = 5;
-/// Floats per box of a form: see `Place::forms`.
+/// Floats per box of a form: the middle of its foot (across, up, along), half its width
+/// across the route, its height, and half its depth along the route.
 pub const FORM_FLOATS: usize = 6;
 
 /// What a song becomes: the route, the regions along it and the impulses on it.
@@ -359,8 +360,7 @@ pub struct FormInView {
     pub onset_s: f64,
     pub part: Part,
     pub side: Side,
-    /// The boxes it stands as, one on each side it stands on: the middle of its foot
-    /// (across, up, along), half its width, its height and half its depth along the route.
+    /// The boxes it stands as, one on each side it stands on: see `FORM_FLOATS`.
     pub boxes_m: Vec<[f64; FORM_FLOATS]>,
 }
 
@@ -625,12 +625,11 @@ impl Place {
         }
     }
 
-    /// The boxes a form stands as, one on each side it stands on: the middle of its foot
-    /// (across, up, along), half its width across the route, its height, and half its
-    /// depth along the route. The camera looks ahead, so a thing beside it is already out
-    /// of the picture: each box stands further along the route than the route is as its
-    /// onset sounds, by as far as has the last of it leave the picture at that moment.
-    /// The picture is the camera's own then, with the dial at rest.
+    /// The boxes a form stands as, one on each side it stands on. The camera looks ahead,
+    /// so a thing beside it is already out of the picture: each box stands further along
+    /// the route than the route is as its onset sounds, by as far as has the last of it
+    /// leave the picture at that moment. The picture is the camera's own then, with the
+    /// dial at rest.
     fn stood(&self, impulse: &Impulse) -> Vec<[f64; FORM_FLOATS]> {
         let Some((part, side)) = impulse.form else {
             return Vec::new();
@@ -732,7 +731,7 @@ impl Place {
         lesser.flat_map(lantern).collect()
     }
 
-    /// The boxes every form stands as, one after another: see `stood`.
+    /// The boxes every form stands as, one after another.
     pub fn forms(&self) -> Vec<f32> {
         let boxes = self.impulses.iter().flat_map(|impulse| &impulse.boxes);
         boxes.flatten().map(|part| *part as f32).collect()

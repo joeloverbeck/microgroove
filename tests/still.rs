@@ -46,15 +46,10 @@ fn one_command_writes_a_still_and_the_numbers_of_its_moment_with_no_display() {
 /// however far out the number: the command is not understood, and no file is looked for.
 #[test]
 fn a_song_time_below_zero_and_a_dial_out_of_range_are_not_understood() {
-    let out_of_range: [&[&str]; 3] = [
-        &["--at", "1:-50"],
-        &["--at", "1", "--dial", "9"],
-        &["--at", "1", "--dial", "-2147483648"],
-    ];
-    for options in out_of_range {
+    for options in ["--at 1:-50", "--at 1 --dial 9", "--at 1 --dial -2147483648"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_microgroove"))
             .args(["still", "no-such-song.wav"])
-            .args(options)
+            .args(options.split(' '))
             .output()
             .unwrap();
         let message = String::from_utf8_lossy(&output.stderr);
