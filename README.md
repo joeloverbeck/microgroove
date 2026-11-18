@@ -8,7 +8,7 @@ Give it a song; it carries you through a place made from that song.
 
 ## Build
 
-Needs a Rust toolchain; it is built and tested with Rust 1.97.1. On Ubuntu the audio output also needs `libasound2-dev` and `libpipewire-0.3-dev` at build time, and libclang, which generates the PipeWire bindings. Pictures are drawn on the GPU through Vulkan. ffmpeg is optional: where it is installed, the tests compare the program's decode and loudness with it.
+Needs rustup. It is built and tested with Rust 1.100.0, the release `rust-toolchain.toml` pins, which rustup installs by itself on the first `cargo` command. On Ubuntu the audio output also needs `libasound2-dev` and `libpipewire-0.3-dev` at build time, and libclang, which generates the PipeWire bindings. Pictures are drawn on the GPU through Vulkan. ffmpeg is optional: where it is installed, the tests compare the program's decode and loudness with it.
 
 ```sh
 cargo build --release

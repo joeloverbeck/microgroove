@@ -79,7 +79,7 @@ impl Playback {
                         shared.clock.take(wanted, due_ns)
                     };
                     out.fill(0.0);
-                    for (pair, frame) in out.chunks_exact_mut(2).zip(lot) {
+                    for (pair, frame) in out.as_chunks_mut::<2>().0.iter_mut().zip(lot) {
                         pair[0] = song.left()[frame] * gain;
                         pair[1] = song.right()[frame] * gain;
                     }

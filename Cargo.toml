@@ -2,6 +2,7 @@
 name = "microgroove"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100.0"
 license = "MIT"
 description = "Give it a song; it carries you through a place made from that song."
 publish = false
